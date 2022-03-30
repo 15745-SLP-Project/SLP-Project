@@ -1,5 +1,6 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -107,6 +108,16 @@ private:
   std::set<Pack> packSet;
 };
 
+class AlignInfo {
+public:
+  AlignInfo(Value *base, Value *inductionVar, unsigned int index)
+      : base(base), inductionVar(inductionVar), index(index) {}
+
+  Value *base;
+  Value *inductionVar;
+  unsigned int index;
+};
+
 class SLP : public FunctionPass {
 public:
   static char ID;
@@ -140,6 +151,10 @@ public:
   }
 
   void findAdjRefs(BasicBlock &BB, PackSet &P) {
+    // Find the base addresses of memory reference
+    setAlignRef(BB);
+
+    // Find all adjacent memory references and add to PackSet
     for (auto &s1 : BB) {
       for (auto &s2 : BB) {
         if ((&s2 != &s1) && s1.mayReadOrWriteMemory() &&
@@ -154,31 +169,102 @@ public:
     }
   }
 
-  bool adjacent(Instruction *s1, Instruction *s2) {
-    // todo
-    return false;
+  void setAlignRef(BasicBlock &BB) {
+    for (auto &s : BB) {
+      // Only look at memory access instructions
+      if (s.mayReadOrWriteMemory()) {
+        // getelementptr instruction
+        GetElementPtrInst *gep = NULL;
+
+        // Load instruction
+        if (auto loadInst = dyn_cast<LoadInst>(&s)) {
+          auto loadPtr = loadInst->getPointerOperand();
+          gep = dyn_cast<GetElementPtrInst>(loadPtr);
+        }
+        // Store instruction
+        if (auto storeInst = dyn_cast<StoreInst>(&s)) {
+          auto storePtr = storeInst->getPointerOperand();
+          gep = dyn_cast<GetElementPtrInst>(storePtr);
+        }
+
+        // Only look at load/store with simple gep
+        if (!gep || gep->getNumIndices() != 2) {
+          continue;
+        }
+
+        // Base address
+        Value *b = gep->getPointerOperand();
+        baseAddress.insert(b);
+
+        // Induction variable
+        Value *iv = nullptr;
+        Value *v = gep->getOperand(2);
+        if (auto addInst = dyn_cast<BinaryOperator>(v)) {
+          if (addInst->getOpcode() == Instruction::Add) {
+            Value *operand0 = addInst->getOperand(0);
+            Value *opearnd1 = addInst->getOperand(1);
+            if (isa<ConstantInt>(opearnd1)) {
+              // Get the memory reference index w.r.t. base address
+              unsigned int index = cast<ConstantInt>(opearnd1)->getZExtValue();
+              setAlignment(&s, b, operand0, index);
+            }
+          }
+        } else {
+          setAlignment(&s, b, iv, 0);
+        }
+      }
+    }
   }
 
-  size_t getAlignment(Instruction *s) {
-    // todo
-    return 0;
+  bool adjacent(Instruction *s1, Instruction *s2) {
+    return checkAlignment(getAlignment(s1), getAlignment(s2), 1);
+  }
+
+  void setAlignment(Instruction *s, Value *b, Value *iv, unsigned int index) {
+    alignInfo.emplace(std::map<Instruction *, AlignInfo>::value_type(
+        s, AlignInfo(b, iv, index)));
+  }
+
+  AlignInfo *getAlignment(Instruction *s) {
+    if (alignInfo.find(s) == alignInfo.end()) {
+      return nullptr;
+    }
+    return &(alignInfo.find(s)->second);
+  }
+
+  bool checkAlignment(AlignInfo *s1, AlignInfo *s2, unsigned int offset) {
+    if (s1 == nullptr || s2 == nullptr) {
+      return false;
+    }
+    if (s1->base != s2->base) {
+      return false;
+    }
+    if (s1->inductionVar != s2->inductionVar) {
+      return false;
+    }
+    return (s1->index + offset == s2->index);
   }
 
   bool stmtsCanPack(BasicBlock &BB, PackSet &P, Instruction *s1,
-                    Instruction *s2, size_t align) {
+                    Instruction *s2, AlignInfo *align) {
     if (isIsomorphic(s1, s2) && isIndependent(s1, s2)) {
       if (!packedInLeft(P, s1) && !packedInRight(P, s2)) {
         auto align_s1 = getAlignment(s1);
         auto align_s2 = getAlignment(s2);
-        // todo
+        if (align_s1 == nullptr || checkAlignment(align, align_s1, 0)) {
+          if (align_s2 == nullptr || checkAlignment(align, align_s2, 1)) {
+            return true;
+          }
+        }
       }
     }
     return false;
   }
 
   bool isIsomorphic(Instruction *s1, Instruction *s2) {
-    // If two instructions have the same operation, they are isomorphic
-    return s1->getOpcode() == s2->getOpcode();
+    // If two instructions have the same operation and type, they are isomorphic
+    return (s1->getOpcode() == s2->getOpcode()) &&
+           (s1->getType() == s2->getType());
   }
 
   bool isIndependent(Instruction *s1, Instruction *s2) {
@@ -190,7 +276,7 @@ public:
   bool packedInLeft(PackSet &P, Instruction *s) {
     for (auto &p : P) {
       if (p.getLeftElement() == s) {
-        return false;
+        return true;
       }
     }
     return false;
@@ -199,7 +285,7 @@ public:
   bool packedInRight(PackSet &P, Instruction *s) {
     for (auto &p : P) {
       if (p.getRightElement() == s) {
-        return false;
+        return true;
       }
     }
     return false;
@@ -213,7 +299,7 @@ public:
         change |= followUseDefs(BB, P, p);
         change |= followDefUses(BB, P, p);
       }
-    } while (!change);
+    } while (change);
   }
 
   bool followUseDefs(BasicBlock &BB, PackSet &P, Pack p) {
@@ -237,9 +323,13 @@ public:
     // todo
   }
 
-  bool doFinalization(Module &M) {
+  bool doFinalization(Module &M) override {
     return false;
   }
+
+private:
+  std::set<Value *> baseAddress;
+  std::map<Instruction *, AlignInfo> alignInfo;
 };
 
 char SLP::ID = 0;
