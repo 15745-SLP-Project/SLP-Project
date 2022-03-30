@@ -79,6 +79,21 @@ public:
     return false;
   }
 
+  // Pack iterator
+  typedef std::vector<Instruction *>::iterator PackIterator;
+
+  PackIterator begin() {
+    return pack.begin();
+  }
+
+  PackIterator end() {
+    return pack.end();
+  }
+
+  std::vector<Instruction *> getPack() {
+    return pack;
+  }
+
 private:
   std::vector<Instruction *> pack;
 };
@@ -94,6 +109,7 @@ public:
     packSet.emplace(Pack(s1, s2));
   }
 
+  // PackSet iterator
   typedef std::set<Pack>::iterator PackSetIterator;
 
   PackSetIterator begin() {
@@ -102,6 +118,17 @@ public:
 
   PackSetIterator end() {
     return packSet.end();
+  }
+
+  // PackSet const iterator
+  typedef std::set<Pack>::const_iterator PackSetConstIterator;
+
+  PackSetConstIterator cbegin() {
+    return packSet.cbegin();
+  }
+
+  PackSetIterator cend() {
+    return packSet.cend();
   }
 
 private:
@@ -135,11 +162,11 @@ public:
 
   // Apply transforms and print summary
   bool runOnFunction(Function &F) override {
-    bool change = false;
+    bool changed = false;
     for (auto &BB : F) {
-      change |= slpExtract(BB);
+      changed |= slpExtract(BB);
     }
-    return change;
+    return changed;
   }
 
   bool slpExtract(BasicBlock &BB) {
@@ -225,6 +252,12 @@ public:
         s, AlignInfo(b, iv, index)));
   }
 
+  void setAlignment(Instruction *dst, Instruction *src) {
+    AlignInfo *align = getAlignment(src);
+    alignInfo.emplace(
+        std::map<Instruction *, AlignInfo>::value_type(dst, *align));
+  }
+
   AlignInfo *getAlignment(Instruction *s) {
     if (alignInfo.find(s) == alignInfo.end()) {
       return nullptr;
@@ -268,9 +301,19 @@ public:
   }
 
   bool isIndependent(Instruction *s1, Instruction *s2) {
-    // todo
     // If two instructions have no dependency, they are independent
-    return false;
+    // Check the use chain of s1 and s2
+    for (auto *s1User : s1->users()) {
+      if ((Value *)s1User == (Value *)s2) {
+        return false;
+      }
+    }
+    for (auto *s2User : s2->users()) {
+      if ((Value *)s2User == (Value *)s1) {
+        return false;
+      }
+    }
+    return true;
   }
 
   bool packedInLeft(PackSet &P, Instruction *s) {
@@ -292,31 +335,89 @@ public:
   }
 
   void extendPacklist(BasicBlock &BB, PackSet &P) {
-    bool change;
+    bool changed;
     do {
-      change = false;
+      changed = false;
       for (auto &p : P) {
-        change |= followUseDefs(BB, P, p);
-        change |= followDefUses(BB, P, p);
+        changed |= followUseDefs(BB, P, p);
+        changed |= followDefUses(BB, P, p);
       }
-    } while (change);
+    } while (changed);
+  }
+
+  int estSavings(Instruction *t1, Instruction *t2, PackSet &P) {
+    return 1;
   }
 
   bool followUseDefs(BasicBlock &BB, PackSet &P, Pack p) {
+    bool changed = false;
+
     Instruction *s1 = p.getLeftElement();
     Instruction *s2 = p.getRightElement();
-    auto align = getAlignment(s1);
+    auto align_s1 = getAlignment(s1);
+    auto align_s2 = getAlignment(s2);
     auto m = s1->getNumOperands();
     assert(m == s2->getNumOperands());
     for (unsigned int j = 0; j < m; j++) {
-      // todo
+      Instruction *t1 = cast<Instruction>(s1->getOperand(j));
+      Instruction *t2 = cast<Instruction>(s2->getOperand(j));
+      if (t1->getParent() == &BB && t2->getParent() == &BB) {
+        if (stmtsCanPack(BB, P, t1, t2, align_s1)) {
+          if (estSavings(t1, t2, P) >= 0) {
+            P.addPair(t1, t2);
+            setAlignment(t1, s1);
+            setAlignment(t2, s2);
+            changed = true;
+          }
+        }
+      }
     }
-    return false;
+
+    return changed;
   }
 
   bool followDefUses(BasicBlock &BB, PackSet &P, Pack p) {
-    // todo
-    return false;
+    bool changed = false;
+
+    int savings = -1;
+
+    Instruction *s1 = p.getLeftElement();
+    Instruction *s2 = p.getRightElement();
+    auto align_s1 = getAlignment(s1);
+    auto align_s2 = getAlignment(s2);
+    Instruction *t1 = nullptr;
+    Instruction *t2 = nullptr;
+    Instruction *u1 = nullptr;
+    Instruction *u2 = nullptr;
+
+    for (auto *s1User : s1->users()) {
+      t1 = cast<Instruction>(s1User);
+      if (t1->getParent() != &BB) {
+        continue;
+      }
+      for (auto *s2User : s2->users()) {
+        t2 = cast<Instruction>(s2User);
+        if (t2->getParent() != &BB) {
+          continue;
+        }
+        if (stmtsCanPack(BB, P, t1, t2, align_s1)) {
+          if (estSavings(t1, t2, P) > savings) {
+            savings = estSavings(t1, t2, P);
+            u1 = t1;
+            u2 = t2;
+          }
+        }
+      }
+    }
+
+    if (savings >= 0) {
+      P.addPair(u1, u2);
+      setAlignment(u1, s1);
+      setAlignment(u2, s2);
+      changed = true;
+    }
+
+    return changed;
   }
 
   void combinePacks(PackSet &P) {
