@@ -15,6 +15,7 @@ all: $(TARGET)
 	@if [ "$(CFG)" -eq 1 ]; then \
 		opt --dot-cfg -disable-output -cfg-dot-filename-prefix .$@ $@; \
 	fi
+	opt --instnamer -S -o $@ $@
 
 %.2.ll: %.c
 	clang -O2 -emit-llvm -S -o $@ $^

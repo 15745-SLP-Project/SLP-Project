@@ -6,12 +6,13 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <iostream>
-#include <list>
 #include <set>
 
 #include "utils.hpp"
 
 using namespace llvm;
+
+const static bool verbose = true;
 
 /*
  * A Pack is an n-tuple, <s1, ..., sn>, where s1, ..., sn are independent
@@ -22,8 +23,8 @@ public:
   Pack() {}
 
   Pack(Instruction *s1, Instruction *s2) {
-    pack[0] = s1;
-    pack[1] = s2;
+    pack.push_back(s1);
+    pack.push_back(s2);
   }
 
   // Only used to combine two packs
@@ -34,7 +35,7 @@ public:
   }
 
   void print(unsigned int index) const {
-    outs() << "\tPack " << index << "\n";
+    outs() << "\tPack " << index << " (" << this << ")\n";
     for (unsigned int i = 0; i < pack.size(); i++) {
       outs() << "\t\t" << i << ": " << *(pack[i]) << "\n";
     }
@@ -131,7 +132,11 @@ class PackSet {
 public:
   PackSet() {}
 
-  void print() {
+  Pack &getNthPack(unsigned int n) {
+    return packSet[n];
+  }
+
+  void printPackSet() {
     outs() << "PackSet\n";
     unsigned int index = 0;
     for (auto &p : packSet) {
@@ -141,20 +146,42 @@ public:
     outs() << "\n";
   }
 
+  void printScheduledPackList() {
+    outs() << "Scheduled Pack List\n";
+    unsigned int index = 0;
+    for (unsigned int i = 0; i < scheduledPackList.size(); i++) {
+      scheduledPackList[i]->print(i);
+    }
+    outs() << "\n";
+  }
+
   void addPair(Instruction *s1, Instruction *s2) {
-    packSet.emplace(Pack(s1, s2));
+    add(Pack(s1, s2));
+    if (verbose)
+      outs() << "[addPair] (" << *s1 << ") and (" << *s2 << ")\n";
   }
 
   void addCombination(Pack &p1, Pack &p2) {
-    packSet.emplace(Pack(p1.pack, p2.pack));
+    add(Pack(p1.pack, p2.pack));
   }
 
   void remove(Pack &p) {
-    packSet.erase(p);
+    erase(p);
+  }
+
+  bool pairExists(Instruction *s1, Instruction *s2) {
+    for (auto &t : packSet) {
+      if (t.isPair()) {
+        if (t.getLeftElement() == s1 && t.getRightElement() == s2) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   // PackSet iterator
-  typedef std::set<Pack>::iterator PackSetIterator;
+  typedef std::vector<Pack>::iterator PackSetIterator;
 
   PackSetIterator begin() {
     return packSet.begin();
@@ -165,7 +192,7 @@ public:
   }
 
   // Scheduled PackList iterator
-  typedef std::list<Pack *>::iterator ScheduledPackListIterator;
+  typedef std::vector<Pack *>::iterator ScheduledPackListIterator;
 
   ScheduledPackListIterator lbegin() {
     return scheduledPackList.begin();
@@ -177,67 +204,92 @@ public:
 
   bool schedule() {
     buildDependency();
-    bool changed;
+
+    std::set<Pack *> scheduled;
+    unsigned int scheduledOldSize;
     do {
-      changed = false;
-      for (auto iter : dependency) {
-        Pack *p = iter.first;
-        std::set<Pack *> pDepSet = iter.second;
+      scheduledOldSize = scheduled.size();
+      for (auto &pRef : packSet) {
+        Pack *p = &pRef;
+
+        // Don't look at already scheduled packs
+        if (scheduled.find(p) != scheduled.end()) {
+          continue;
+        }
 
         // No dependency
-        if (pDepSet.size() == 0) {
+        if (dependency.find(p) == dependency.end()) {
+          scheduled.insert(p);
           scheduledPackList.push_back(p);
-          changed = true;
           break;
         }
 
-        // All dependency already in scheduledPackList
+        // All dependency already scheduled
+        std::set<Pack *> pDepSet = dependency[p];
         bool checkAllDep = true;
         for (auto pDep : pDepSet) {
-          bool found = false;
-          for (auto scheduledPack : scheduledPackList) {
-            if (pDep == scheduledPack) {
-              found = true;
-              break;
-            }
-          }
-          if (!found) {
+          if (scheduled.find(pDep) == scheduled.end()) {
             checkAllDep = false;
             break;
           }
         }
         if (checkAllDep) {
+          scheduled.insert(p);
           scheduledPackList.push_back(p);
-          changed = true;
           break;
         }
       }
-    } while (changed);
+    } while (scheduledOldSize != scheduled.size());
     return scheduledPackList.size() == packSet.size();
   }
 
+  size_t size() {
+    return packSet.size();
+  }
+
 private:
-  std::set<Pack> packSet;
+  std::vector<Pack> packSet;
   std::map<Pack *, std::set<Pack *>> dependency;
-  std::list<Pack *> scheduledPackList;
+  std::vector<Pack *> scheduledPackList;
+
+  void add(Pack &&p) {
+    for (auto &t : packSet) {
+      if (t == p) {
+        return;
+      }
+    }
+    packSet.emplace_back(p);
+  }
+
+  void erase(Pack &p) {
+    for (auto iter = packSet.begin(); iter != packSet.end(); iter++) {
+      if (p == *iter) {
+        packSet.erase(iter);
+      }
+    }
+  }
 
   void buildDependency() {
     for (auto pIter = begin(); pIter != end(); pIter++) {
       for (auto pDepIter = begin(); pDepIter != end(); pDepIter++) {
-        Pack p = *pIter;
-        Pack pDep = *pDepIter;
+        Pack *p = &(*pIter);
+        Pack *pDep = &(*pDepIter);
+        if (p == pDep) {
+          continue;
+        }
+
         bool dependent = false;
         // Check whether p depends on pDep
-        for (auto s : p) {
-          for (auto sDep : pDep) {
+        for (auto s : *p) {
+          for (auto sDep : *pDep) {
             // Check whether s depends on sDep
             if (isDependentOn(s, sDep)) {
               dependent = true;
-              if (dependency.find(&p) == dependency.end()) {
-                dependency[&p] = std::set<Pack *>();
+              if (dependency.find(p) == dependency.end()) {
+                dependency[p] = std::set<Pack *>();
               }
               // If p depends on pDep, add to dependency graph
-              dependency[&p].insert(&pDep);
+              dependency[p].insert(pDep);
             }
           }
           if (dependent) {
@@ -246,9 +298,35 @@ private:
         }
       }
     }
+    unsigned int i = 0, j;
+    for (auto it = dependency.begin(); it != dependency.end(); it++) {
+      Pack *p = it->first;
+      std::set<Pack *> pDeps = it->second;
+      outs() << "The pack " << p << " depends on packs:";
+      for (auto pDep : pDeps) {
+        outs() << " " << pDep;
+      }
+      outs() << "\n";
+    }
   }
 };
 
+/*
+ * AlignInfo class stores the basic alignment information described in the
+ * paper, including a base address, an induction variable, and the index (or
+ * offset against the base address).
+ *
+ * In the foo example,
+ *  A[i + 0] = A[i + 0] * A[i + 0];
+ *  A[i + 1] = A[i + 1] * A[i + 1];
+ *  A[i + 2] = A[i + 2] * A[i + 2];
+ *  A[i + 3] = A[i + 3] * A[i + 3]; <--
+ * Look at the last instruction, base = A, inductionVar = i, index = 3
+ *
+ * Alignment information will first be assigned to load and store instruction,
+ * and in next steps the align info of memory access instructions will be copied
+ * to instructions that have dependency relationship with them.
+ */
 class AlignInfo {
 public:
   AlignInfo(Value *base, Value *inductionVar, unsigned int index)
@@ -277,8 +355,13 @@ public:
   // Apply transforms and print summary
   bool runOnFunction(Function &F) override {
     bool changed = false;
-    for (auto &BB : F) {
-      changed |= slpExtract(BB);
+
+    if (F.getName() == "foo") {
+      for (auto &BB : F) {
+        baseAddress.clear();
+        alignInfo.clear();
+        changed |= slpExtract(BB);
+      }
     }
     return changed;
   }
@@ -288,7 +371,13 @@ public:
     findAdjRefs(BB, P);
     extendPacklist(BB, P);
     combinePacks(P);
+    P.printPackSet();
     P.schedule();
+    P.printScheduledPackList();
+    if (P.size() > 0) {
+      // codeGen(P);
+      return true;
+    }
     return false;
   }
 
@@ -303,8 +392,9 @@ public:
             s2.mayReadOrWriteMemory()) {
           if (adjacent(&s1, &s2)) {
             auto align = getAlignment(&s1);
-            if (stmtsCanPack(BB, P, &s1, &s2, align))
+            if (stmtsCanPack(BB, P, &s1, &s2, align)) {
               P.addPair(&s1, &s2);
+            }
           }
         }
       }
@@ -338,8 +428,7 @@ public:
         Value *b = gep->getPointerOperand();
         baseAddress.insert(b);
 
-        // Induction variable
-        Value *iv = nullptr;
+        // Find the induction variable
         Value *v = gep->getOperand(2);
         if (auto addInst = dyn_cast<BinaryOperator>(v)) {
           if (addInst->getOpcode() == Instruction::Add) {
@@ -349,10 +438,19 @@ public:
               // Get the memory reference index w.r.t. base address
               unsigned int index = cast<ConstantInt>(opearnd1)->getZExtValue();
               setAlignment(&s, b, operand0, index);
+              if (verbose)
+                outs() << "[setAlignRef] set alignment for (" << s
+                       << "), base = " << b->getName()
+                       << ", iv = " << operand0->getName()
+                       << ", index = " << index << "\n";
             }
           }
         } else {
-          setAlignment(&s, b, iv, 0);
+          setAlignment(&s, b, v, 0);
+          if (verbose)
+            outs() << "[setAlignRef] set alignment for (" << s
+                   << "), base = " << b->getName() << ", iv = " << v->getName()
+                   << ", index = 0\n";
         }
       }
     }
@@ -429,17 +527,23 @@ public:
 
   void extendPacklist(BasicBlock &BB, PackSet &P) {
     bool changed;
+    // Apply BFS to search the def-use chain and extend pack list
+    unsigned int head = 0, tail;
     do {
-      changed = false;
-      for (auto &p : P) {
-        changed |= followUseDefs(BB, P, p);
-        changed |= followDefUses(BB, P, p);
+      tail = P.size();
+      while (head < tail) {
+        followUseDefs(BB, P, P.getNthPack(head));
+        followDefUses(BB, P, P.getNthPack(head));
+        head++;
       }
-    } while (changed);
+    } while (head < P.size());
   }
 
   int estSavings(Instruction *t1, Instruction *t2, PackSet &P) {
-    return 1;
+    if (P.pairExists(t1, t2))
+      return -1;
+    else
+      return 1;
   }
 
   bool followUseDefs(BasicBlock &BB, PackSet &P, Pack p) {
@@ -540,39 +644,35 @@ public:
   }
 
   /*
-    A PackSet consists of pack(s). Each vectorizable pack is of the form:
-      x0 = y0 OP z0
-      x1 = y1 OP z1
-      x2 = y2 OP z2
-      x3 = y3 OP z3
-
-    x0-3 are either temps or array elems
-    y0-3 are either temps, array elems, constants
-    z0-3 are either temps, array elems, or constants
-
-    The general procedure is to:
-      1. pack y0-3 into vector y
-      2. pack z0-3 into vector z
-      3. perform x = y OP z
-      4. unpack x into x0-3
-
-    We are imposing the following restrictions to limit the number of cases
-    we can handle:
-      1.
-        if src_i is an array elem, then all src_j have to be array elems of the
-        same array. this waywe will only have to do a bitcast to convert src0-3
-        into a vector
-      2.
-        if dest_i is an array elem, then all dest_j have to be array elems of
-        the same array. this way we will only have to do a bitcast to convert
-        dest0-3 into a vector
-
-
-    For now, we are just doing the simple, naive thing where we pack everything,
-    do the op, then unpack
-  */
+   * A PackSet consists of pack(s). Each vectorizable pack is of the form:
+   *   x0 = y0 OP z0
+   *   x1 = y1 OP z1
+   *   x2 = y2 OP z2
+   *   x3 = y3 OP z3
+   *
+   * x0-3 are either temps or array elems
+   * y0-3 are either temps, array elems, constants
+   * z0-3 are either temps, array elems, or constants
+   *
+   * The general procedure is to:
+   *   1. pack y0-3 into vector y
+   *   2. pack z0-3 into vector z
+   *   3. perform x = y OP z
+   *   4. unpack x into x0-3
+   *
+   * We are imposing the following restrictions to limit the number of cases
+   * we can handle:
+   *  1. if src_i is an array elem, then all src_j have to be array elems of the
+   *     same array. this way we will only have to do a bitcast to convert
+   *     src0-3 into a vector
+   *  2. if dest_i is an array elem, then all dest_j have to
+   *     be array elems of the same array. this way we will only have to do a
+   *     bitcast to convert dest0-3 into a vector
+   *
+   * For now, we are just doing the simple, naive thing where we pack
+   * everything, do the op, then unpack
+   */
   void codeGen(PackSet &P) {
-
     // pack operands into a vector
     auto packOperands = [](std::vector<Value *> &operands,
                            IRBuilder<> &builder) {

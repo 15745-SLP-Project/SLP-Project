@@ -1,9 +1,13 @@
 #include "utils.hpp"
 
 bool isIsomorphic(Instruction *s1, Instruction *s2) {
+  bool bothBinaryOperator = isa<BinaryOperator>(s1) && isa<BinaryOperator>(s2);
+  bool bothLoadInst = isa<LoadInst>(s1) && isa<LoadInst>(s2);
+  bool bothStoreInst = isa<StoreInst>(s1) && isa<StoreInst>(s2);
+
   return (s1->getOpcode() == s2->getOpcode()) &&
-         (s1->getType() == s2->getType()) && (isa<BinaryOperator>(s1)) &&
-         (isa<BinaryOperator>(s2));
+         (s1->getType() == s2->getType()) &&
+         (bothBinaryOperator || bothLoadInst || bothStoreInst);
 }
 
 bool isDependentOn(Instruction *s, Instruction *sDep) {
