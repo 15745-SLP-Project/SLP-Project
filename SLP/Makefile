@@ -5,7 +5,9 @@ CXXFLAGS = -rdynamic $(LLVM_CONFIG:c++14=c++17) -g -O0 -fPIC
 
 slp.o: slp.cpp
 
-slp.so: slp.o
+utils.o: utils.cpp
+
+slp.so: slp.o utils.o
 	$(CXX) -dylib -shared $^ -o $@
 
 clean:

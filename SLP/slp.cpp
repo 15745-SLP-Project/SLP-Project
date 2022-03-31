@@ -6,7 +6,10 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <iostream>
+#include <list>
 #include <set>
+
+#include "utils.hpp"
 
 using namespace llvm;
 
@@ -23,10 +26,18 @@ public:
     pack[1] = s2;
   }
 
+  // Only used to combine two packs
   Pack(std::vector<Instruction *> v1, std::vector<Instruction *> v2) {
     pack.reserve(v1.size() + v2.size() - 1);
     pack.insert(pack.end(), v1.begin(), v1.end());
     pack.insert(pack.end(), ++(v2.begin()), v2.end());
+  }
+
+  void print(unsigned int index) const {
+    outs() << "\tPack " << index << "\n";
+    for (unsigned int i = 0; i < pack.size(); i++) {
+      outs() << "\t\t" << i << ": " << *(pack[i]) << "\n";
+    }
   }
 
   size_t getSize() const {
@@ -120,6 +131,16 @@ class PackSet {
 public:
   PackSet() {}
 
+  void print() {
+    outs() << "PackSet\n";
+    unsigned int index = 0;
+    for (auto &p : packSet) {
+      p.print(index);
+      index++;
+    }
+    outs() << "\n";
+  }
+
   void addPair(Instruction *s1, Instruction *s2) {
     packSet.emplace(Pack(s1, s2));
   }
@@ -143,8 +164,89 @@ public:
     return packSet.end();
   }
 
+  // Scheduled PackList iterator
+  typedef std::list<Pack *>::iterator ScheduledPackListIterator;
+
+  ScheduledPackListIterator lbegin() {
+    return scheduledPackList.begin();
+  }
+
+  ScheduledPackListIterator lend() {
+    return scheduledPackList.end();
+  }
+
+  bool schedule() {
+    buildDependency();
+    bool changed;
+    do {
+      changed = false;
+      for (auto iter : dependency) {
+        Pack *p = iter.first;
+        std::set<Pack *> pDepSet = iter.second;
+
+        // No dependency
+        if (pDepSet.size() == 0) {
+          scheduledPackList.push_back(p);
+          changed = true;
+          break;
+        }
+
+        // All dependency already in scheduledPackList
+        bool checkAllDep = true;
+        for (auto pDep : pDepSet) {
+          bool found = false;
+          for (auto scheduledPack : scheduledPackList) {
+            if (pDep == scheduledPack) {
+              found = true;
+              break;
+            }
+          }
+          if (!found) {
+            checkAllDep = false;
+            break;
+          }
+        }
+        if (checkAllDep) {
+          scheduledPackList.push_back(p);
+          changed = true;
+          break;
+        }
+      }
+    } while (changed);
+    return scheduledPackList.size() == packSet.size();
+  }
+
 private:
   std::set<Pack> packSet;
+  std::map<Pack *, std::set<Pack *>> dependency;
+  std::list<Pack *> scheduledPackList;
+
+  void buildDependency() {
+    for (auto pIter = begin(); pIter != end(); pIter++) {
+      for (auto pDepIter = begin(); pDepIter != end(); pDepIter++) {
+        Pack p = *pIter;
+        Pack pDep = *pDepIter;
+        bool dependent = false;
+        // Check whether p depends on pDep
+        for (auto s : p) {
+          for (auto sDep : pDep) {
+            // Check whether s depends on sDep
+            if (isDependentOn(s, sDep)) {
+              dependent = true;
+              if (dependency.find(&p) == dependency.end()) {
+                dependency[&p] = std::set<Pack *>();
+              }
+              // If p depends on pDep, add to dependency graph
+              dependency[&p].insert(&pDep);
+            }
+          }
+          if (dependent) {
+            break;
+          }
+        }
+      }
+    }
+  }
 };
 
 class AlignInfo {
@@ -186,6 +288,7 @@ public:
     findAdjRefs(BB, P);
     extendPacklist(BB, P);
     combinePacks(P);
+    P.schedule();
     return false;
   }
 
@@ -304,30 +407,6 @@ public:
       }
     }
     return false;
-  }
-
-  bool isIsomorphic(Instruction *s1, Instruction *s2) {
-    // If two instructions have the same operation and type, they are isomorphic
-    // also have to be binary ops
-    return (s1->getOpcode() == s2->getOpcode()) &&
-           (s1->getType() == s2->getType()) && (isa<BinaryOperator>(s1)) &&
-           (isa<BinaryOperator>(s2));
-  }
-
-  bool isIndependent(Instruction *s1, Instruction *s2) {
-    // If two instructions have no dependency, they are independent
-    // Check the use chain of s1 and s2
-    for (auto *s1User : s1->users()) {
-      if ((Value *)s1User == (Value *)s2) {
-        return false;
-      }
-    }
-    for (auto *s2User : s2->users()) {
-      if ((Value *)s2User == (Value *)s1) {
-        return false;
-      }
-    }
-    return true;
   }
 
   bool packedInLeft(PackSet &P, Instruction *s) {
@@ -505,18 +584,19 @@ public:
       return vec;
     };
 
-    // iterate over all packs
-    for (auto packSetIter = P.begin(); packSetIter != P.end(); packSetIter++) {
-      Pack pack = *packSetIter;
+    // iterate over all packs in the scheduledPackList
+    for (auto packListIter = P.lbegin(); packListIter != P.lend();
+         packListIter++) {
+      Pack *pack = *packListIter;
 
       // IRBuilder for this pack
       // have it start adding new instructions before first instruction of pack
-      IRBuilder<> builder(pack.getFirstElement());
+      IRBuilder<> builder(pack->getFirstElement());
 
       // separate operand0s and operand1s
       std::vector<Value *> operand0s, operand1s;
-      for (int i = 0; i < pack.getSize(); i++) {
-        auto *instr = pack.getNthElement(i);
+      for (int i = 0; i < pack->getSize(); i++) {
+        auto *instr = pack->getNthElement(i);
         operand0s.push_back(instr->getOperand(0));
         operand0s.push_back(instr->getOperand(1));
       }
@@ -527,18 +607,18 @@ public:
 
       // vector bin op
       auto *destVec =
-          builder.CreateBinOp(pack.getBinOpCode(), operand0Vec, operand1Vec);
+          builder.CreateBinOp(pack->getBinOpCode(), operand0Vec, operand1Vec);
 
       // unpack res
-      for (int i = 0; i < pack.getSize(); i++) {
-        auto *instr = pack.getNthElement(i);
+      for (int i = 0; i < pack->getSize(); i++) {
+        auto *instr = pack->getNthElement(i);
         auto *newVal = builder.CreateExtractElement(destVec, i);
         instr->replaceAllUsesWith(newVal);
       }
 
       // delete all instrs in pack
-      for (int i = 0; i < pack.getSize(); i++) {
-        pack.getNthElement(i)->eraseFromParent();
+      for (int i = 0; i < pack->getSize(); i++) {
+        pack->getNthElement(i)->eraseFromParent();
       }
     }
   }
