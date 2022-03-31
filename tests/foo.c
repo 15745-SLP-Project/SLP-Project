@@ -29,7 +29,7 @@ int main() {
   set();
 
   long s = sum();
-  printf("%d\n", s);
+  printf("%ld\n", s);
 
   return (int)s;
 }

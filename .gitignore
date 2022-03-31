@@ -1,6 +1,7 @@
 *.bc
 *.ll
 *.S
+*.dot
 
 # Prerequisites
 *.d
