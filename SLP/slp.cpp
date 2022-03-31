@@ -1,4 +1,5 @@
 #include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Pass.h"
@@ -43,6 +44,7 @@ public:
   Instruction *getLastElement() const {
     return pack[getSize() - 1];
   }
+  Instruction::BinaryOps getBinOpCode(); // TODO
 
   /*
    * A Pair is a Pack of size two, where the first statement is considered as
@@ -108,6 +110,7 @@ public:
 
 private:
   std::vector<Instruction *> pack;
+  Instruction::BinaryOps binOpCode;
 };
 
 /*
@@ -305,8 +308,10 @@ public:
 
   bool isIsomorphic(Instruction *s1, Instruction *s2) {
     // If two instructions have the same operation and type, they are isomorphic
+    // also have to be binary ops
     return (s1->getOpcode() == s2->getOpcode()) &&
-           (s1->getType() == s2->getType());
+           (s1->getType() == s2->getType()) && (isa<BinaryOperator>(s1)) &&
+           (isa<BinaryOperator>(s2));
   }
 
   bool isIndependent(Instruction *s1, Instruction *s2) {
@@ -453,6 +458,89 @@ public:
         }
       }
     } while (changed);
+  }
+
+  /*
+    A PackSet consists of pack(s). Each vectorizable pack is of the form:
+      x0 = y0 OP z0
+      x1 = y1 OP z1
+      x2 = y2 OP z2
+      x3 = y3 OP z3
+
+    x0-3 are either temps or array elems
+    y0-3 are either temps, array elems, constants
+    z0-3 are either temps, array elems, or constants
+
+    The general procedure is to:
+      1. pack y0-3 into vector y
+      2. pack z0-3 into vector z
+      3. perform x = y OP z
+      4. unpack x into x0-3
+
+    We are imposing the following restrictions to limit the number of cases
+    we can handle:
+      1.
+        if src_i is an array elem, then all src_j have to be array elems of the
+        same array. this waywe will only have to do a bitcast to convert src0-3
+        into a vector
+      2.
+        if dest_i is an array elem, then all dest_j have to be array elems of
+        the same array. this way we will only have to do a bitcast to convert
+        dest0-3 into a vector
+
+
+    For now, we are just doing the simple, naive thing where we pack everything,
+    do the op, then unpack
+  */
+  void codeGen(PackSet &P) {
+
+    // pack operands into a vector
+    auto packOperands = [](std::vector<Value *> &operands,
+                           IRBuilder<> &builder) {
+      auto *vecType = VectorType::get(operands[0]->getType(), operands.size());
+      Value *vec = UndefValue::get(vecType);
+      for (int i = 0; i < operands.size(); i++) {
+        vec = builder.CreateInsertElement(vec, operands[i], i);
+      }
+      return vec;
+    };
+
+    // iterate over all packs
+    for (auto packSetIter = P.begin(); packSetIter != P.end(); packSetIter++) {
+      Pack pack = *packSetIter;
+
+      // IRBuilder for this pack
+      // have it start adding new instructions before first instruction of pack
+      IRBuilder<> builder(pack.getFirstElement());
+
+      // separate operand0s and operand1s
+      std::vector<Value *> operand0s, operand1s;
+      for (int i = 0; i < pack.getSize(); i++) {
+        auto *instr = pack.getNthElement(i);
+        operand0s.push_back(instr->getOperand(0));
+        operand0s.push_back(instr->getOperand(1));
+      }
+
+      // pack operands
+      auto *operand0Vec = packOperands(operand0s, builder);
+      auto *operand1Vec = packOperands(operand1s, builder);
+
+      // vector bin op
+      auto *destVec =
+          builder.CreateBinOp(pack.getBinOpCode(), operand0Vec, operand1Vec);
+
+      // unpack res
+      for (int i = 0; i < pack.getSize(); i++) {
+        auto *instr = pack.getNthElement(i);
+        auto *newVal = builder.CreateExtractElement(destVec, i);
+        instr->replaceAllUsesWith(newVal);
+      }
+
+      // delete all instrs in pack
+      for (int i = 0; i < pack.getSize(); i++) {
+        pack.getNthElement(i)->eraseFromParent();
+      }
+    }
   }
 
   bool doFinalization(Module &M) override {
