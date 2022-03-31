@@ -22,12 +22,26 @@ public:
     pack[1] = s2;
   }
 
+  Pack(std::vector<Instruction *> v1, std::vector<Instruction *> v2) {
+    pack.reserve(v1.size() + v2.size() - 1);
+    pack.insert(pack.end(), v1.begin(), v1.end());
+    pack.insert(pack.end(), ++(v2.begin()), v2.end());
+  }
+
   size_t getSize() const {
     return pack.size();
   }
 
   Instruction *getNthElement(size_t n) const {
     return pack[n];
+  }
+
+  Instruction *getFirstElement() const {
+    return pack[0];
+  }
+
+  Instruction *getLastElement() const {
+    return pack[getSize() - 1];
   }
 
   /*
@@ -90,9 +104,7 @@ public:
     return pack.end();
   }
 
-  std::vector<Instruction *> getPack() {
-    return pack;
-  }
+  friend class PackSet;
 
 private:
   std::vector<Instruction *> pack;
@@ -109,6 +121,14 @@ public:
     packSet.emplace(Pack(s1, s2));
   }
 
+  void addCombination(Pack &p1, Pack &p2) {
+    packSet.emplace(Pack(p1.pack, p2.pack));
+  }
+
+  void remove(Pack &p) {
+    packSet.erase(p);
+  }
+
   // PackSet iterator
   typedef std::set<Pack>::iterator PackSetIterator;
 
@@ -118,17 +138,6 @@ public:
 
   PackSetIterator end() {
     return packSet.end();
-  }
-
-  // PackSet const iterator
-  typedef std::set<Pack>::const_iterator PackSetConstIterator;
-
-  PackSetConstIterator cbegin() {
-    return packSet.cbegin();
-  }
-
-  PackSetIterator cend() {
-    return packSet.cend();
   }
 
 private:
@@ -421,7 +430,29 @@ public:
   }
 
   void combinePacks(PackSet &P) {
-    // todo
+    bool changed;
+    do {
+      changed = false;
+      for (auto pi1 = P.begin(); pi1 != P.end(); pi1++) {
+        for (auto pi2 = P.begin(); pi2 != P.end(); pi2++) {
+          Pack p1 = *pi1;
+          Pack p2 = *pi2;
+          if (&p1 == &p2) {
+            continue;
+          }
+          if (p1.getLastElement() == p2.getFirstElement()) {
+            P.addCombination(p1, p2);
+            P.remove(p1);
+            P.remove(p2);
+            changed = true;
+            break;
+          }
+        }
+        if (changed) {
+          break;
+        }
+      }
+    } while (changed);
   }
 
   bool doFinalization(Module &M) override {
