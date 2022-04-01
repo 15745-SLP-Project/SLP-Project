@@ -1,24 +1,25 @@
 TEST ?= foo
 TARGET = $(TEST).0.out $(TEST).1.out $(TEST).2.out $(TEST).slp.out $(TEST).vec.out
 CFG = 0
+CFLAGS = -target aarch64-linux-gnu
 
 all: $(TARGET)
 
 %.0.ll: %.c
-	clang -O0 -emit-llvm -S -o $@ $^
+	clang -O0 $(CFLAGS) -emit-llvm -S -o $@ $^
 	@if [ "$(CFG)" -eq 1 ]; then \
 		opt --dot-cfg -disable-output -cfg-dot-filename-prefix .$@ $@; \
 	fi
 
 %.1.ll: %.c
-	clang -O1 -emit-llvm -S -o $@ $^
+	clang -O1 $(CFLAGS) -emit-llvm -S -o $@ $^
 	@if [ "$(CFG)" -eq 1 ]; then \
 		opt --dot-cfg -disable-output -cfg-dot-filename-prefix .$@ $@; \
 	fi
 	opt --instnamer -S -o $@ $@
 
 %.2.ll: %.c
-	clang -O2 -emit-llvm -S -o $@ $^
+	clang -O2 $(CFLAGS) -emit-llvm -S -o $@ $^
 	@if [ "$(CFG)" -eq 1 ]; then \
 		opt --dot-cfg -disable-output -cfg-dot-filename-prefix .$@ $@; \
 	fi
@@ -31,10 +32,14 @@ all: $(TARGET)
 	opt -load ../vectorizer/vectorizer.so -vectorizer -S -o $@ $^
 
 %.S: %.ll
-	llc -O0 $^ -o $@
+	llc -march=aarch64 --aarch64-neon-syntax=generic -O0 $^ -o $@
 
 %.out: %.S
 	clang $^ -o $@
+#	aarch64-linux-gnu-gcc $^ -o $@
+
+%.qemu: %.out
+	qemu-aarch64 -L /usr/aarch64-linux-gnu ./$^
 
 clean:
 	-@rm -f *.ll
