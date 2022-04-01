@@ -1,7 +1,7 @@
 TEST ?= foo
 TARGET = $(TEST).0.out $(TEST).1.out $(TEST).2.out $(TEST).slp.out $(TEST).vec.out
 CFG = 0
-CFLAGS = -target aarch64-linux-gnu
+CFLAGS = -target aarch64-linux-gnu -I/usr/aarch64-linux-gnu/include
 
 all: $(TARGET)
 
@@ -27,6 +27,7 @@ all: $(TARGET)
 
 %.slp.ll: %.1.ll
 	opt -load ../SLP/slp.so -slp -S -o $@ $^
+	opt -dce -S -o $@ $@
 
 %.vec.ll: %.1.ll
 	opt -load ../vectorizer/vectorizer.so -vectorizer -S -o $@ $^

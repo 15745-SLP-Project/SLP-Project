@@ -1,341 +1,11 @@
-#include "llvm/IR/Function.h"
-#include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/Instruction.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/Pass.h"
-#include "llvm/Support/raw_ostream.h"
+#include "slp.hpp"
 
-#include <iostream>
-#include <set>
-
-#include "utils.hpp"
-
-using namespace llvm;
-
-const static bool verbose = true;
-
-/*
- * A Pack is an n-tuple, <s1, ..., sn>, where s1, ..., sn are independent
- * isomorphic statements in a basic block
- */
-class Pack {
-public:
-  Pack() {}
-
-  Pack(Instruction *s1, Instruction *s2) {
-    pack.push_back(s1);
-    pack.push_back(s2);
-  }
-
-  // Only used to combine two packs
-  Pack(std::vector<Instruction *> v1, std::vector<Instruction *> v2) {
-    pack.reserve(v1.size() + v2.size() - 1);
-    pack.insert(pack.end(), v1.begin(), v1.end());
-    pack.insert(pack.end(), ++(v2.begin()), v2.end());
-  }
-
-  void print(unsigned int index) const {
-    outs() << "\tPack " << index << " (" << this << ")\n";
-    for (unsigned int i = 0; i < pack.size(); i++) {
-      outs() << "\t\t" << i << ": " << *(pack[i]) << "\n";
-    }
-  }
-
-  size_t getSize() const {
-    return pack.size();
-  }
-
-  Instruction *getNthElement(size_t n) const {
-    return pack[n];
-  }
-
-  Instruction *getFirstElement() const {
-    return pack[0];
-  }
-
-  Instruction *getLastElement() const {
-    return pack[getSize() - 1];
-  }
-  Instruction::BinaryOps getBinOpCode(); // TODO
-
-  /*
-   * A Pair is a Pack of size two, where the first statement is considered as
-   * the left element, and the second statment is considered the right element
-   */
-  bool isPair() const {
-    return getSize() == 2;
-  }
-
-  Instruction *getLeftElement() const {
-    assert(isPair());
-    return getNthElement(0);
-  }
-
-  Instruction *getRightElement() const {
-    assert(isPair());
-    return getNthElement(1);
-  }
-
-  bool operator==(const Pack &r) const {
-    if (getSize() != r.getSize()) {
-      return false;
-    }
-    for (size_t i = 0; i < getSize(); i++) {
-      if (getNthElement(i) != r.getNthElement(i)) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  bool operator!=(const Pack &r) const {
-    return !(*this == r);
-  }
-
-  bool operator<(const Pack &r) const {
-    if (getSize() < r.getSize()) {
-      return true;
-    }
-    if (getSize() > r.getSize()) {
-      return false;
-    }
-    for (size_t i = 0; i < getSize(); i++) {
-      if (getNthElement(i) < r.getNthElement(i)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  // Pack iterator
-  typedef std::vector<Instruction *>::iterator PackIterator;
-
-  PackIterator begin() {
-    return pack.begin();
-  }
-
-  PackIterator end() {
-    return pack.end();
-  }
-
-  friend class PackSet;
-
-private:
-  std::vector<Instruction *> pack;
-  Instruction::BinaryOps binOpCode;
-};
-
-/*
- * A PackSet is a set of Packs
- */
-class PackSet {
-public:
-  PackSet() {}
-
-  Pack &getNthPack(unsigned int n) {
-    return packSet[n];
-  }
-
-  void printPackSet() {
-    outs() << "PackSet\n";
-    unsigned int index = 0;
-    for (auto &p : packSet) {
-      p.print(index);
-      index++;
-    }
-    outs() << "\n";
-  }
-
-  void printScheduledPackList() {
-    outs() << "Scheduled Pack List\n";
-    unsigned int index = 0;
-    for (unsigned int i = 0; i < scheduledPackList.size(); i++) {
-      scheduledPackList[i]->print(i);
-    }
-    outs() << "\n";
-  }
-
-  void addPair(Instruction *s1, Instruction *s2) {
-    add(Pack(s1, s2));
-    if (verbose)
-      outs() << "[addPair] (" << *s1 << ") and (" << *s2 << ")\n";
-  }
-
-  void addCombination(Pack &p1, Pack &p2) {
-    add(Pack(p1.pack, p2.pack));
-  }
-
-  void remove(Pack &p) {
-    erase(p);
-  }
-
-  bool pairExists(Instruction *s1, Instruction *s2) {
-    for (auto &t : packSet) {
-      if (t.isPair()) {
-        if (t.getLeftElement() == s1 && t.getRightElement() == s2) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  // PackSet iterator
-  typedef std::vector<Pack>::iterator PackSetIterator;
-
-  PackSetIterator begin() {
-    return packSet.begin();
-  }
-
-  PackSetIterator end() {
-    return packSet.end();
-  }
-
-  // Scheduled PackList iterator
-  typedef std::vector<Pack *>::iterator ScheduledPackListIterator;
-
-  ScheduledPackListIterator lbegin() {
-    return scheduledPackList.begin();
-  }
-
-  ScheduledPackListIterator lend() {
-    return scheduledPackList.end();
-  }
-
-  bool schedule() {
-    buildDependency();
-
-    std::set<Pack *> scheduled;
-    unsigned int scheduledOldSize;
-    do {
-      scheduledOldSize = scheduled.size();
-      for (auto &pRef : packSet) {
-        Pack *p = &pRef;
-
-        // Don't look at already scheduled packs
-        if (scheduled.find(p) != scheduled.end()) {
-          continue;
-        }
-
-        // No dependency
-        if (dependency.find(p) == dependency.end()) {
-          scheduled.insert(p);
-          scheduledPackList.push_back(p);
-          break;
-        }
-
-        // All dependency already scheduled
-        std::set<Pack *> pDepSet = dependency[p];
-        bool checkAllDep = true;
-        for (auto pDep : pDepSet) {
-          if (scheduled.find(pDep) == scheduled.end()) {
-            checkAllDep = false;
-            break;
-          }
-        }
-        if (checkAllDep) {
-          scheduled.insert(p);
-          scheduledPackList.push_back(p);
-          break;
-        }
-      }
-    } while (scheduledOldSize != scheduled.size());
-    return scheduledPackList.size() == packSet.size();
-  }
-
-  size_t size() {
-    return packSet.size();
-  }
-
-private:
-  std::vector<Pack> packSet;
-  std::map<Pack *, std::set<Pack *>> dependency;
-  std::vector<Pack *> scheduledPackList;
-
-  void add(Pack &&p) {
-    for (auto &t : packSet) {
-      if (t == p) {
-        return;
-      }
-    }
-    packSet.emplace_back(p);
-  }
-
-  void erase(Pack &p) {
-    for (auto iter = packSet.begin(); iter != packSet.end(); iter++) {
-      if (p == *iter) {
-        packSet.erase(iter);
-      }
-    }
-  }
-
-  void buildDependency() {
-    for (auto pIter = begin(); pIter != end(); pIter++) {
-      for (auto pDepIter = begin(); pDepIter != end(); pDepIter++) {
-        Pack *p = &(*pIter);
-        Pack *pDep = &(*pDepIter);
-        if (p == pDep) {
-          continue;
-        }
-
-        bool dependent = false;
-        // Check whether p depends on pDep
-        for (auto s : *p) {
-          for (auto sDep : *pDep) {
-            // Check whether s depends on sDep
-            if (isDependentOn(s, sDep)) {
-              dependent = true;
-              if (dependency.find(p) == dependency.end()) {
-                dependency[p] = std::set<Pack *>();
-              }
-              // If p depends on pDep, add to dependency graph
-              dependency[p].insert(pDep);
-            }
-          }
-          if (dependent) {
-            break;
-          }
-        }
-      }
-    }
-    unsigned int i = 0, j;
-    for (auto it = dependency.begin(); it != dependency.end(); it++) {
-      Pack *p = it->first;
-      std::set<Pack *> pDeps = it->second;
-      outs() << "The pack " << p << " depends on packs:";
-      for (auto pDep : pDeps) {
-        outs() << " " << pDep;
-      }
-      outs() << "\n";
-    }
-  }
-};
-
-/*
- * AlignInfo class stores the basic alignment information described in the
- * paper, including a base address, an induction variable, and the index (or
- * offset against the base address).
- *
- * In the foo example,
- *  A[i + 0] = A[i + 0] * A[i + 0];
- *  A[i + 1] = A[i + 1] * A[i + 1];
- *  A[i + 2] = A[i + 2] * A[i + 2];
- *  A[i + 3] = A[i + 3] * A[i + 3]; <--
- * Look at the last instruction, base = A, inductionVar = i, index = 3
- *
- * Alignment information will first be assigned to load and store instruction,
- * and in next steps the align info of memory access instructions will be copied
- * to instructions that have dependency relationship with them.
- */
-class AlignInfo {
-public:
-  AlignInfo(Value *base, Value *inductionVar, unsigned int index)
-      : base(base), inductionVar(inductionVar), index(index) {}
-
-  Value *base;
-  Value *inductionVar;
-  unsigned int index;
-};
+Value *Pack::getOperand(unsigned int n, PackSet &P) {
+  assert(pack.size() > 0);
+  assert(n < pack[0]->getNumOperands());
+  Pack *p = P.findPack((Instruction *)(pack[0]->getOperand(n)));
+  return p->getValue();
+}
 
 class SLP : public FunctionPass {
 public:
@@ -375,7 +45,7 @@ public:
     P.schedule();
     P.printScheduledPackList();
     if (P.size() > 0) {
-      // codeGen(P);
+      codeGen(P);
       return true;
     }
     return false;
@@ -478,6 +148,12 @@ public:
     return &(alignInfo.find(s)->second);
   }
 
+  /*
+   * Check alignment information
+   *
+   * Check whether s1 and s2 shares the same base address, same induction
+   * variable, and the index differs by offset
+   */
   bool checkAlignment(AlignInfo *s1, AlignInfo *s2, unsigned int offset) {
     if (s1 == nullptr || s2 == nullptr) {
       return false;
@@ -673,16 +349,7 @@ public:
    * everything, do the op, then unpack
    */
   void codeGen(PackSet &P) {
-    // pack operands into a vector
-    auto packOperands = [](std::vector<Value *> &operands,
-                           IRBuilder<> &builder) {
-      auto *vecType = VectorType::get(operands[0]->getType(), operands.size());
-      Value *vec = UndefValue::get(vecType);
-      for (int i = 0; i < operands.size(); i++) {
-        vec = builder.CreateInsertElement(vec, operands[i], i);
-      }
-      return vec;
-    };
+    outs() << "Code generation\n";
 
     // iterate over all packs in the scheduledPackList
     for (auto packListIter = P.lbegin(); packListIter != P.lend();
@@ -693,30 +360,62 @@ public:
       // have it start adding new instructions before first instruction of pack
       IRBuilder<> builder(pack->getFirstElement());
 
-      // separate operand0s and operand1s
-      std::vector<Value *> operand0s, operand1s;
-      for (int i = 0; i < pack->getSize(); i++) {
-        auto *instr = pack->getNthElement(i);
-        operand0s.push_back(instr->getOperand(0));
-        operand0s.push_back(instr->getOperand(1));
+      unsigned int opcode = pack->getOpcode();
+      unsigned int vecWidth = pack->getVecWidth();
+      Type *type = pack->getType();
+
+      // Vector types
+      auto vecType = VectorType::get(type, vecWidth);
+      auto vecPtrType = PointerType::get(vecType, 0);
+
+      switch (opcode) {
+      case Instruction::Load: {
+        // Load pointer
+        auto align = getAlignment(pack->getFirstElement());
+        auto iv = align->inductionVar;
+        auto firstLoad = dyn_cast<LoadInst>(pack->getFirstElement());
+        auto basePtr = firstLoad->getPointerOperand();
+        auto vecPtr = builder.CreateBitCast(basePtr, vecPtrType);
+
+        outs() << "\t" << *vecPtr << "\n";
+
+        // Load instruction
+        auto load = builder.CreateLoad(vecType, vecPtr);
+        pack->setDest(load);
+
+        outs() << "\t" << *load << "\n";
+        break;
+      }
+      case Instruction::Store: {
+        // Store pointer
+        auto align = getAlignment(pack->getFirstElement());
+        auto iv = align->inductionVar;
+        auto firstLoad = dyn_cast<StoreInst>(pack->getFirstElement());
+        auto basePtr = firstLoad->getPointerOperand();
+        auto vecPtr = builder.CreateBitCast(basePtr, vecPtrType);
+
+        outs() << "\t" << *vecPtr << "\n";
+
+        // Store instruction
+        auto store = builder.CreateStore(pack->getOperand(0, P), vecPtr);
+
+        outs() << "\t" << *store << "\n";
+        break;
+      }
+      case Instruction::Add:
+      case Instruction::Mul: {
+        auto binOp = builder.CreateBinOp(
+            pack->getBinOp(), pack->getOperand(0, P), pack->getOperand(1, P));
+        pack->setDest(binOp);
+
+        outs() << "\t" << *binOp << "\n";
+        break;
+      }
+      default:
+        outs() << "Unsupported opcode " << opcode << "\n";
       }
 
-      // pack operands
-      auto *operand0Vec = packOperands(operand0s, builder);
-      auto *operand1Vec = packOperands(operand1s, builder);
-
-      // vector bin op
-      auto *destVec =
-          builder.CreateBinOp(pack->getBinOpCode(), operand0Vec, operand1Vec);
-
-      // unpack res
-      for (int i = 0; i < pack->getSize(); i++) {
-        auto *instr = pack->getNthElement(i);
-        auto *newVal = builder.CreateExtractElement(destVec, i);
-        instr->replaceAllUsesWith(newVal);
-      }
-
-      // delete all instrs in pack
+      // Delete all the instructions in pack
       for (int i = 0; i < pack->getSize(); i++) {
         pack->getNthElement(i)->eraseFromParent();
       }
