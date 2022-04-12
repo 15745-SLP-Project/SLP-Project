@@ -40,9 +40,11 @@ public:
     extendPacklist(BB, P);
     combinePacks(P);
     P.printPackSet();
-    P.schedule();
-    P.printScheduledPackList();
-    if (P.size() > 0) {
+    bool sched = P.schedule();
+    if (sched) {
+      P.printScheduledPackList();
+      P.findPrePack();
+      P.findPostPack();
       // codeGen(P);
       return true;
     }

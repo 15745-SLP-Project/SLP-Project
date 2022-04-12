@@ -291,7 +291,7 @@ public:
         }
       }
     } while (scheduledOldSize != scheduled.size());
-    return scheduledPackList.size() == packSet.size();
+    return (scheduledPackList.size() == packSet.size()) && (packSet.size() > 0);
   }
 
   size_t size() {
@@ -308,6 +308,91 @@ public:
       }
     }
     return nullptr;
+  }
+
+  void findPrePack() {
+    unsigned int vecWidth = packSet[0].getVecWidth();
+    for (auto &p : scheduledPackList) {
+      auto instr = p->getFirstElement();
+
+      for (unsigned int i = 0; i < instr->getNumOperands(); i++) {
+        bool add = false;
+
+        // If the dependent value is not in the packSet, add to prePack
+        if (auto dependentInstr = dyn_cast<Instruction>(instr->getOperand(i))) {
+          auto dependent = findPack(dependentInstr);
+          if (!dependent) {
+            add = true;
+          }
+        }
+        // If the operand is not an instruction, e.g., is a function argument,
+        // directly add to prePack
+        else {
+          add = true;
+        }
+
+        if (add) {
+          std::vector<Value *> tmp;
+          for (unsigned int j = 0; j < vecWidth; j++) {
+            auto ii = p->getNthElement(j);
+            auto di = ii->getOperand(i);
+            tmp.push_back(di);
+          }
+          prePack.push_back(tmp);
+        }
+      }
+    }
+
+    if (verbose) {
+      for (auto &p : prePack) {
+        outs() << "[prePack]";
+        for (auto &v : p) {
+          outs() << " (" << v->getName() << ")";
+        }
+        outs() << "\n";
+      }
+    }
+  }
+
+  void findPostPack() {
+    unsigned int vecWidth = packSet[0].getVecWidth();
+    for (auto &p : scheduledPackList) {
+      auto instr = p->getFirstElement();
+      bool add = false;
+
+      for (auto *user : instr->users()) {
+        // If the value is used outside the packSet, add to postPack
+        if (auto userInstr = dyn_cast<Instruction>(user)) {
+          auto userPack = findPack(userInstr);
+          if (!userPack) {
+            add = true;
+          }
+        }
+        // If the value is not used as an instruction, add to postPack
+        else {
+          add = true;
+        }
+      }
+
+      if (add) {
+        std::vector<Value *> tmp;
+        for (unsigned int j = 0; j < vecWidth; j++) {
+          auto ii = p->getNthElement(j);
+          tmp.push_back((Value *)ii);
+        }
+        postPack.push_back(tmp);
+      }
+    }
+
+    if (verbose) {
+      for (auto &p : postPack) {
+        outs() << "[postPack]";
+        for (auto &v : p) {
+          outs() << " (" << v->getName() << ")";
+        }
+        outs() << "\n";
+      }
+    }
   }
 
 private:
@@ -330,6 +415,10 @@ private:
    * dependency graph built earlier.
    */
   std::vector<Pack *> scheduledPackList;
+
+  std::vector<std::vector<Value *>> prePack;
+
+  std::vector<std::vector<Value *>> postPack;
 
   // Add pack p to packSet (stored in a vector)
   void add(Pack &&p) {
