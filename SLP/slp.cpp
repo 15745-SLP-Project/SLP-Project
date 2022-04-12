@@ -26,12 +26,10 @@ public:
   bool runOnFunction(Function &F) override {
     bool changed = false;
 
-    if (F.getName() == "foo") {
-      for (auto &BB : F) {
-        baseAddress.clear();
-        alignInfo.clear();
-        changed |= slpExtract(BB);
-      }
+    for (auto &BB : F) {
+      baseAddress.clear();
+      alignInfo.clear();
+      changed |= slpExtract(BB);
     }
     return changed;
   }
@@ -45,7 +43,7 @@ public:
     P.schedule();
     P.printScheduledPackList();
     if (P.size() > 0) {
-      codeGen(P);
+      // codeGen(P);
       return true;
     }
     return false;
@@ -169,7 +167,7 @@ public:
 
   bool stmtsCanPack(BasicBlock &BB, PackSet &P, Instruction *s1,
                     Instruction *s2, AlignInfo *align) {
-    if (isIsomorphic(s1, s2) && isIndependent(s1, s2)) {
+    if (isIsomorphic(s1, s2) && isIndependent(s1, s2) && (s1 != s2)) {
       if (!packedInLeft(P, s1) && !packedInRight(P, s2)) {
         auto align_s1 = getAlignment(s1);
         auto align_s2 = getAlignment(s2);
@@ -232,8 +230,11 @@ public:
     auto m = s1->getNumOperands();
     assert(m == s2->getNumOperands());
     for (unsigned int j = 0; j < m; j++) {
-      Instruction *t1 = cast<Instruction>(s1->getOperand(j));
-      Instruction *t2 = cast<Instruction>(s2->getOperand(j));
+      Instruction *t1 = dyn_cast<Instruction>(s1->getOperand(j));
+      Instruction *t2 = dyn_cast<Instruction>(s2->getOperand(j));
+      if (!t1 || !t2) {
+        continue;
+      }
       if (t1->getParent() == &BB && t2->getParent() == &BB) {
         if (stmtsCanPack(BB, P, t1, t2, align_s1)) {
           if (estSavings(t1, t2, P) >= 0) {

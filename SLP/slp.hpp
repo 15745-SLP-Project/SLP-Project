@@ -179,6 +179,9 @@ public:
   }
 
   void printPackSet() {
+    if (packSet.size() == 0)
+      return;
+
     outs() << "PackSet\n";
     unsigned int index = 0;
     for (auto &p : packSet) {
@@ -189,6 +192,9 @@ public:
   }
 
   void printScheduledPackList() {
+    if (scheduledPackList.size() == 0)
+      return;
+
     outs() << "Scheduled Pack List\n";
     unsigned int index = 0;
     for (unsigned int i = 0; i < scheduledPackList.size(); i++) {
