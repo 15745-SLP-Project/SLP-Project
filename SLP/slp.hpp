@@ -63,6 +63,15 @@ public:
     return pack[getSize() - 1];
   }
 
+  int getIndex(Value *instr) {
+    for (int i=0; i < getSize(); i++) {
+      if (pack[i] == instr) {
+        return i;
+      }
+    }
+    assert(false);
+  }
+
   /*
    * A Pair is a Pack of size two, where the first statement is considered as
    * the left element, and the second statment is considered the right element
@@ -165,6 +174,8 @@ private:
 
   // Destination value
   Value *value;
+
+
 };
 
 /*
@@ -318,18 +329,22 @@ public:
       for (unsigned int i = 0; i < instr->getNumOperands(); i++) {
         bool add = false;
 
-        // If the dependent value is not in the packSet, add to prePack
-        if (auto dependentInstr = dyn_cast<Instruction>(instr->getOperand(i))) {
-          auto dependent = findPack(dependentInstr);
-          if (!dependent) {
-            add = true;
-          }
-        }
-        // If the operand is not an instruction, e.g., is a function argument,
-        // directly add to prePack
-        else {
-          add = true;
-        }
+        if (!isa<BinaryOperator>(instr)) break;
+
+        add = true;
+
+        // // If the dependent value is not in the packSet, add to prePack
+        // if (auto dependentInstr = dyn_cast<Instruction>(instr->getOperand(i))) {
+        //   auto dependent = findPack(dependentInstr);
+        //   if (!dependent) {
+        //     add = true;
+        //   }
+        // }
+        // // If the operand is not an instruction, e.g., is a function argument,
+        // // directly add to prePack
+        // else {
+        //   add = true;
+        // }
 
         if (add) {
           std::vector<Value *> tmp;
@@ -338,20 +353,27 @@ public:
             auto di = ii->getOperand(i);
             tmp.push_back(di);
           }
+          if (verbose) {
+            outs() << "\tprepacking Pack " << " (" << p << ")\n";
+            for (auto &v : tmp) {
+              outs() << " (" << v->getName() << ")";
+            }
+            outs() << "\n";
+          }
           prePack.push_back(tmp);
         }
       }
     }
 
-    if (verbose) {
-      for (auto &p : prePack) {
-        outs() << "[prePack]";
-        for (auto &v : p) {
-          outs() << " (" << v->getName() << ")";
-        }
-        outs() << "\n";
-      }
-    }
+    // if (verbose) {
+    //   for (auto &p : prePack) {
+    //     outs() << "[prePack]";
+    //     for (auto &v : p) {
+    //       outs() << " (" << v->getName() << ")";
+    //     }
+    //     outs() << "\n";
+    //   }
+    // }
   }
 
   void findPostPack() {
@@ -360,19 +382,23 @@ public:
       auto instr = p->getFirstElement();
       bool add = false;
 
-      for (auto *user : instr->users()) {
-        // If the value is used outside the packSet, add to postPack
-        if (auto userInstr = dyn_cast<Instruction>(user)) {
-          auto userPack = findPack(userInstr);
-          if (!userPack) {
-            add = true;
-          }
-        }
-        // If the value is not used as an instruction, add to postPack
-        else {
-          add = true;
-        }
-      }
+      if (!isa<BinaryOperator>(instr)) continue;
+
+      add = true;
+
+      // for (auto *user : instr->users()) {
+      //   // If the value is used outside the packSet, add to postPack
+      //   if (auto userInstr = dyn_cast<Instruction>(user)) {
+      //     auto userPack = findPack(userInstr);
+      //     if (!userPack) {
+      //       add = true;
+      //     }
+      //   }
+      //   // If the value is not used as an instruction, add to postPack
+      //   else {
+      //     add = true;
+      //   }
+      // }
 
       if (add) {
         std::vector<Value *> tmp;
@@ -380,19 +406,27 @@ public:
           auto ii = p->getNthElement(j);
           tmp.push_back((Value *)ii);
         }
+        if (verbose) {
+            outs() << "\tpostpacking Pack " << " (" << p << ")\n";
+            for (auto &v : tmp) {
+              outs() << " (" << v->getName() << ")";
+            }
+            outs() << "\n";
+          }
+
         postPack.push_back(tmp);
       }
     }
 
-    if (verbose) {
-      for (auto &p : postPack) {
-        outs() << "[postPack]";
-        for (auto &v : p) {
-          outs() << " (" << v->getName() << ")";
-        }
-        outs() << "\n";
-      }
-    }
+    // if (verbose) {
+    //   for (auto &p : postPack) {
+    //     outs() << "[postPack]";
+    //     for (auto &v : p) {
+    //       outs() << " (" << v->getName() << ")";
+    //     }
+    //     outs() << "\n";
+    //   }
+    // }
   }
 
 private:

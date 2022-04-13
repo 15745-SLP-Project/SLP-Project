@@ -4,6 +4,7 @@ Value *Pack::getOperand(unsigned int n, PackSet &P) {
   assert(pack.size() > 0);
   assert(n < pack[0]->getNumOperands());
   Pack *p = P.findPack((Instruction *)(pack[0]->getOperand(n)));
+  if (p == nullptr) return nullptr;
   return p->getValue();
 }
 
@@ -24,6 +25,9 @@ public:
 
   // Apply transforms and print summary
   bool runOnFunction(Function &F) override {
+    outs() << F.getName() << "\n";
+    outs() << "\n";
+
     bool changed = false;
 
     for (auto &BB : F) {
@@ -45,7 +49,7 @@ public:
       P.printScheduledPackList();
       P.findPrePack();
       P.findPostPack();
-      // codeGen(P);
+      codeGen(P);
       return true;
     }
     return false;
@@ -103,10 +107,10 @@ public:
         if (auto addInst = dyn_cast<BinaryOperator>(v)) {
           if (addInst->getOpcode() == Instruction::Add) {
             Value *operand0 = addInst->getOperand(0);
-            Value *opearnd1 = addInst->getOperand(1);
-            if (isa<ConstantInt>(opearnd1)) {
+            Value *operand1 = addInst->getOperand(1);
+            if (isa<ConstantInt>(operand1)) {
               // Get the memory reference index w.r.t. base address
-              unsigned int index = cast<ConstantInt>(opearnd1)->getZExtValue();
+              unsigned int index = cast<ConstantInt>(operand1)->getZExtValue();
               setAlignment(&s, b, operand0, index);
               if (verbose)
                 outs() << "[setAlignRef] set alignment for (" << s
@@ -352,11 +356,114 @@ public:
    * everything, do the op, then unpack
    */
   void codeGen(PackSet &P) {
+    /* 
+      - if all operands are not from the same pack, then this means
+      that there is not currently a llvm vec that holds all of them
+        - so we need to create a new llvm vec to hold them
+        - for each operand
+          - if operand comes from a pack
+            - ExtractElem
+            - prepack into new llvm vec
+          - else
+            - prepack into new llvm vec
+        - return new llvm vec
+
+      - else
+        - return pack's llvm vec
+    */
+    auto getOperandVec = [] (IRBuilder<> &builder, PackSet &P, Pack *pack, int operandNum) {
+      // determine if all operands comes from same pack
+      bool fromSamePack = true;
+      Pack *samePack = nullptr;
+      for (auto packIter = pack->begin(); packIter != pack->end(); packIter++) {
+        Instruction* instr = *packIter;
+        Value* operand = instr->getOperand(operandNum);
+
+        // if operand is defined by instruction
+        if (Instruction *def = dyn_cast<Instruction>(operand)) {
+          // get the pack which defines this operand
+          Pack *operandPack = P.findPack(def);
+
+          if (operandPack == nullptr) {
+            fromSamePack = false;
+            break;
+          }
+
+          // first iter, so just set samePack to the pack of first instr's operand
+          if (samePack == nullptr) {
+            samePack = operandPack;
+          }
+          // if packs dont match, then not all operands from same pack
+          else if (samePack != operandPack) {
+            fromSamePack = false;
+            break;
+          }
+        }
+
+        // if operand is not defined by instruction, then we definitely need to pack
+        else {
+          fromSamePack = false;
+          break;
+        }
+      }
+
+      // if from the same pack, then just return the pack's vec
+      if (fromSamePack) {
+        return pack->getOperand(operandNum, P);
+      }
+
+      // not from same pack, so need to prepack operands
+      else {
+        // create new vec
+        auto* intType = builder.getInt32Ty();
+        auto* vecType = VectorType::get(intType, pack->getSize());
+        auto* zero = builder.getInt32(0);
+        auto* size = builder.getInt32(1);
+        auto* initVec = UndefValue::get(vecType);
+
+        Value* currVec = initVec;
+
+        for (int i=0; i < pack->getSize(); i++) {
+          Instruction* instr = pack->getNthElement(i);
+          Value* operand = instr->getOperand(operandNum);
+
+          // if operand is instruction, means it was defined before
+          if (Instruction *def = dyn_cast<Instruction>(operand)) {
+            // get the pack which defines this operand
+            Pack *operandPack = P.findPack(def);
+
+            // if operand is not in a pack, then can directly insert into currVec
+            if (operandPack == nullptr) {
+              currVec = builder.CreateInsertElement(currVec, def, i);
+              outs() << "\t" << *currVec << "\n";
+            }
+            // operand is in a pack, so need to extract it and insert it
+            else {
+              // get index of operand in its pack
+              int index = operandPack->getIndex(def);
+              auto* newDef = builder.CreateExtractElement(operandPack->getValue(), index);
+              outs() << "\t" << *newDef << "\n";
+              currVec = builder.CreateInsertElement(currVec, newDef, i);
+              outs() << "\t" << *currVec << "\n";
+            }
+          }
+
+          // operand was not instruction, so just insert it
+          else {
+            currVec = builder.CreateInsertElement(currVec, operand, i);
+            outs() << "\t" << *currVec << "\n";
+          }
+        }
+
+        // return new vec
+        return currVec;
+      }
+    };
+
     outs() << "Code generation\n";
 
     // iterate over all packs in the scheduledPackList
-    for (auto packListIter = P.lbegin(); packListIter != P.lend();
-         packListIter++) {
+    for (auto packListIter = P.lbegin(); packListIter != P.lend(); packListIter++) {
       Pack *pack = *packListIter;
 
       // IRBuilder for this pack
@@ -372,53 +479,83 @@ public:
       auto vecPtrType = PointerType::get(vecType, 0);
 
       switch (opcode) {
-      case Instruction::Load: {
-        // Load pointer
-        auto align = getAlignment(pack->getFirstElement());
-        auto iv = align->inductionVar;
-        auto firstLoad = dyn_cast<LoadInst>(pack->getFirstElement());
-        auto basePtr = firstLoad->getPointerOperand();
-        auto vecPtr = builder.CreateBitCast(basePtr, vecPtrType);
 
-        outs() << "\t" << *vecPtr << "\n";
+        case Instruction::Load: {
+          // Load pointer
+          auto align = getAlignment(pack->getFirstElement());
+          auto iv = align->inductionVar;
+          auto firstLoad = dyn_cast<LoadInst>(pack->getFirstElement());
+          auto basePtr = firstLoad->getPointerOperand();
+          auto vecPtr = builder.CreateBitCast(basePtr, vecPtrType);
 
-        // Load instruction
-        auto load = builder.CreateLoad(vecType, vecPtr);
-        pack->setDest(load);
+          outs() << "\t" << *vecPtr << "\n";
 
-        outs() << "\t" << *load << "\n";
-        break;
+          // Load instruction
+          auto load = builder.CreateLoad(vecType, vecPtr);
+          pack->setDest(load);
+
+          outs() << "\t" << *load << "\n";
+          break;
+        }
+
+        case Instruction::Store: {
+          // Store pointer
+          auto align = getAlignment(pack->getFirstElement());
+          auto iv = align->inductionVar;
+          auto firstStore = dyn_cast<StoreInst>(pack->getFirstElement());
+          auto basePtr = firstStore->getPointerOperand();
+          auto vecPtr = builder.CreateBitCast(basePtr, vecPtrType);
+
+          outs() << "\t" << *vecPtr << "\n";
+
+          // Store instruction
+          Value *operand0 = getOperandVec(builder, P, pack, 0);
+          auto store = builder.CreateStore(operand0, vecPtr);
+
+          outs() << "\t" << *store << "\n";
+          break;
+        }
+
+        default: {
+          if (isa<BinaryOperator>(pack->getNthElement(0))) {
+            Value *operand0 = getOperandVec(builder, P, pack, 0);
+            Value *operand1 = getOperandVec(builder, P, pack, 1);
+            auto binOp = builder.CreateBinOp(pack->getBinOp(), operand0, operand1);
+            pack->setDest(binOp);
+
+            outs() << "\t" << *binOp << "\n";
+            break;
+          }
+
+          else {
+            outs() << "Unsupported opcode " << opcode << "\n";
+          }
+        }
       }
-      case Instruction::Store: {
-        // Store pointer
-        auto align = getAlignment(pack->getFirstElement());
-        auto iv = align->inductionVar;
-        auto firstLoad = dyn_cast<StoreInst>(pack->getFirstElement());
-        auto basePtr = firstLoad->getPointerOperand();
-        auto vecPtr = builder.CreateBitCast(basePtr, vecPtrType);
 
-        outs() << "\t" << *vecPtr << "\n";
-
-        // Store instruction
-        auto store = builder.CreateStore(pack->getOperand(0, P), vecPtr);
-
-        outs() << "\t" << *store << "\n";
-        break;
+      /*
+      there may be instructions not within a pack that will require the output of
+      one of the instructions in this pack. in this case, extract the item out
+      of the pack and replace it as the operand of the depdent instruction
+      */
+      for (int i=0; i < pack->getSize(); i++) {
+        Instruction *def = pack->getNthElement(i);
+        for (auto *user : def->users()) {
+          Instruction *userInstr = cast<Instruction>(user);
+          // if userInstr not in pack
+          if (P.findPack(userInstr) == nullptr) {
+            int index = pack->getIndex(def);
+            auto* newDef = builder.CreateExtractElement(pack->getValue(), index);
+            // replace def with newDef
+            def->replaceAllUsesWith(newDef);
+          }
+        }
       }
-      case Instruction::Add:
-      case Instruction::Mul: {
-        auto binOp = builder.CreateBinOp(
-            pack->getBinOp(), pack->getOperand(0, P), pack->getOperand(1, P));
-        pack->setDest(binOp);
+    }
 
-        outs() << "\t" << *binOp << "\n";
-        break;
-      }
-      default:
-        outs() << "Unsupported opcode " << opcode << "\n";
-      }
-
-      // Delete all the instructions in pack
+    // Delete all the instructions in all packs
+    for (auto packListIter = P.lbegin(); packListIter != P.lend(); packListIter++) {
+      Pack *pack = *packListIter;
       for (int i = 0; i < pack->getSize(); i++) {
         pack->getNthElement(i)->eraseFromParent();
       }

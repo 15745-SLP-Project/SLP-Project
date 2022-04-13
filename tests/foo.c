@@ -34,25 +34,25 @@ int main() {
   return (int)s;
 }
 
-int test(int a) {
-  int arr[4];
-  arr[0] = a + 0;
-  arr[1] = a + 1;
-  arr[2] = a + 2;
-  arr[3] = a + 3;
-  return arr[0] + arr[1] + arr[2] + arr[3];
-}
+// int test(int a) {
+//   int arr[4];
+//   arr[0] = a + 0;
+//   arr[1] = a + 1;
+//   arr[2] = a + 2;
+//   arr[3] = a + 3;
+//   return arr[0] + arr[1] + arr[2] + arr[3];
+// }
 
-int test1(int a) {
-  // int arr[4];
-  // arr[0] = a + 0;
-  // arr[1] = a + 1;
-  // arr[2] = a + 2;
-  // arr[3] = a + 3;
-  // return arr[0] + arr[1] + arr[2] + arr[3];
-  return 0;
-}
+// int test1(int a) {
+//   // int arr[4];
+//   // arr[0] = a + 0;
+//   // arr[1] = a + 1;
+//   // arr[2] = a + 2;
+//   // arr[3] = a + 3;
+//   // return arr[0] + arr[1] + arr[2] + arr[3];
+//   return 0;
+// }
 
-int test2(int a, int b, int c, int d) {
-  return 0;
-}
+// int test2(int a, int b, int c, int d) {
+//   return 0;
+// }
