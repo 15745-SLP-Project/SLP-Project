@@ -48,15 +48,15 @@ int test4(int a, int b, int c, int d, long i) {
   return A[i] + A[i+1] + A[i+2] + A[i+3];
 }
 
-int test5(int a, int b, int c, int d, long i) {
+int test5(long i) {
   // should be parallelizable into a vector add
-  // bitcast(A[i:i+4]) = <a, b, c, d> + bitcast(A[i:i+4])
-  A[i] = a * A[i];
-  A[i + 1] = b * A[i + 1];
-  A[i + 2] = c * A[i + 2];
-  A[i + 3] = d * A[i + 3];
+  // bitcast(A[i:i+4]) = bitcast(A[i+4:i+8]) + bitcast(A[i:i+4])
+  A[i]      = A[i + 4] + A[i];
+  A[i + 1]  = A[i + 5] + A[i + 1];
+  A[i + 2]  = A[i + 6] + A[i + 2];
+  A[i + 3]  = A[i + 7] + A[i + 3];
 
-  return A[i] + A[i+1] + A[i+2] + A[i+3];
+  return 0;
 }
 
 int main() {
@@ -65,7 +65,6 @@ int main() {
   printf("test2: %d\n", test2(1, 2, 3, 4, 0));
   printf("test3: %d\n", test3(1, 2, 3, 4, 0));
   printf("test4: %d\n", test4(1, 2, 3, 4, 0));
-  printf("test5: %d\n", test5(1, 2, 3, 4, 0));
-
+  printf("test5: %d\n", test5(0));
   return 0;
 }
