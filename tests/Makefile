@@ -1,3 +1,5 @@
+CC = gcc
+
 TARGET = $(TEST).0.out $(TEST).1.out $(TEST).2.out $(TEST).slp.out $(TEST).vec.out
 CFLAGS = -target aarch64-linux-gnu -I /usr/aarch64-linux-gnu/include -I $(TEST)/src
 
@@ -37,6 +39,7 @@ all: $(OUTPUT_DIR) $(SRCS) $(TEST_NAME).0.out $(TEST_NAME).1.out $(TEST_NAME).2.
 	clang -O2 $(CFLAGS) -emit-llvm -S -o $@ $^
 
 %.slp.ll: %.1.ll
+	opt -instnamer -S -o $^ $^
 	opt -load ../SLP/slp.so -slp -S -o $@ $^
 	opt -dce -S -o $@ $@
 
@@ -47,21 +50,24 @@ all: $(OUTPUT_DIR) $(SRCS) $(TEST_NAME).0.out $(TEST_NAME).1.out $(TEST_NAME).2.
 	llc -filetype=obj -march=aarch64 --aarch64-neon-syntax=generic -O0 $^ -o $@
 
 $(TEST_NAME).0.out: $(0_os) | $(0_Ss)
-	gcc -o $@ $^ -lm
+	$(CC) -o $@ $^ -lm
 
 $(TEST_NAME).1.out: $(1_os) | $(1_Ss)
-	gcc -o $@ $^ -lm
+	$(CC) -o $@ $^ -lm
 
 $(TEST_NAME).2.out: $(2_os) | $(2_Ss)
-	gcc -o $@ $^ -lm
+	$(CC) -o $@ $^ -lm
 
 $(TEST_NAME).slp.out: $(slp_os) | $(slp_Ss)
-	gcc -o $@ $^ -lm
+	$(CC) -o $@ $^ -lm
+
+.PRECIOUS: %.0.ll %.1.ll %.2.ll %.slp.ll
 
 clean:
 	@rm -rf output
 	@find . -name '*.ll' -exec rm -r {} \;
 	@find . -name '*.S' -exec rm -r {} \;
+	@find . -name '*.o' -exec rm -r {} \;
 
 .PHONY: all clean
 
