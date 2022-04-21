@@ -43,3 +43,8 @@
 
 # vscode related
 .vscode
+
+*.DS_Store
+*data*
+*Docs*
+*Spec*

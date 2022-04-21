@@ -414,9 +414,9 @@ public:
 
       // not from same pack, so need to prepack operands
       else {
-        // create new vec
-        auto* intType = builder.getInt32Ty();
-        auto* vecType = VectorType::get(intType, pack->getSize());
+        // create new vec 
+        auto* baseType = pack->getNthElement(i)->getType();
+        auto* vecType = VectorType::get(baseType, pack->getSize());
         auto* zero = builder.getInt32(0);
         auto* size = builder.getInt32(1);
         auto* initVec = UndefValue::get(vecType);

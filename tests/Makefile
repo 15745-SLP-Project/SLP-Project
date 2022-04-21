@@ -1,55 +1,67 @@
-TEST ?= foo
 TARGET = $(TEST).0.out $(TEST).1.out $(TEST).2.out $(TEST).slp.out $(TEST).vec.out
-CFG = 0
-CFLAGS = -target aarch64-linux-gnu -I/usr/aarch64-linux-gnu/include
+CFLAGS = -target aarch64-linux-gnu -I /usr/aarch64-linux-gnu/include -I $(TEST)/src
 
-all: $(TARGET)
+INCDIRS = $(addprefix -I, $(sort $(dir $(shell find $(TEST) -name '*.h'))))
+CFLAGS += $(INCDIRS)
+
+OUTPUT_DIR = output/$(TEST)
+TEST_NAME = $(OUTPUT_DIR)/$(TEST)
+
+$(OUTPUT_DIR):
+	mkdir -p $@
+
+TEST ?= milc
+SRCS := $(shell find $(TEST) -name '*.c')
+
+0_Ss = $(patsubst %.c,%.0.S,$(SRCS))
+0_os = $(patsubst %.c,%.0.o,$(SRCS))
+
+1_Ss = $(patsubst %.c,%.1.S,$(SRCS))
+1_os = $(patsubst %.c,%.1.o,$(SRCS))
+
+2_Ss = $(patsubst %.c,%.2.S,$(SRCS))
+2_os = $(patsubst %.c,%.2.o,$(SRCS))
+
+slp_Ss = $(patsubst %.c,%.slp.S,$(SRCS))
+slp_os = $(patsubst %.c,%.slp.o,$(SRCS))
+
+all: $(OUTPUT_DIR) $(SRCS) $(TEST_NAME).0.out $(TEST_NAME).1.out $(TEST_NAME).2.out $(TEST_NAME).slp.out
 
 %.0.ll: %.c
 	clang -O0 $(CFLAGS) -emit-llvm -S -o $@ $^
-	@if [ "$(CFG)" -eq 1 ]; then \
-		opt --dot-cfg -disable-output -cfg-dot-filename-prefix .$@ $@; \
-	fi
 
 %.1.ll: %.c
 	clang -O1 $(CFLAGS) -emit-llvm -S -o $@ $^
-	@if [ "$(CFG)" -eq 1 ]; then \
-		opt --dot-cfg -disable-output -cfg-dot-filename-prefix .$@ $@; \
-	fi
-	opt --instnamer -S -o $@ $@
 
 %.2.ll: %.c
 	clang -O2 $(CFLAGS) -emit-llvm -S -o $@ $^
-	@if [ "$(CFG)" -eq 1 ]; then \
-		opt --dot-cfg -disable-output -cfg-dot-filename-prefix .$@ $@; \
-	fi
-# 	opt -slp-vectorizer -S -o $@ $^
 
 %.slp.ll: %.1.ll
 	opt -load ../SLP/slp.so -slp -S -o $@ $^
 	opt -dce -S -o $@ $@
 
-%.vec.ll: %.1.ll
-	opt -load ../vectorizer/vectorizer.so -vectorizer -S -o $@ $^
-
 %.S: %.ll
-	llc -march=aarch64 --aarch64-neon-syntax=generic -O0 $^ -o $@
+	llc -filetype=asm -march=aarch64 --aarch64-neon-syntax=generic -O0 $^ -o $@
 
-%.out: %.S
-	clang $^ -o $@
-#	aarch64-linux-gnu-gcc $^ -o $@
+%.o: %.ll
+	llc -filetype=obj -march=aarch64 --aarch64-neon-syntax=generic -O0 $^ -o $@
 
-%.qemu: %.out
-	qemu-aarch64 -L /usr/aarch64-linux-gnu ./$^
+$(TEST_NAME).0.out: $(0_os) | $(0_Ss)
+	gcc -o $@ $^ -lm
+
+$(TEST_NAME).1.out: $(1_os) | $(1_Ss)
+	gcc -o $@ $^ -lm
+
+$(TEST_NAME).2.out: $(2_os) | $(2_Ss)
+	gcc -o $@ $^ -lm
+
+$(TEST_NAME).slp.out: $(slp_os) | $(slp_Ss)
+	gcc -o $@ $^ -lm
 
 clean:
-	-@rm -f *.ll
-	-@rm -f *.S
-	-@rm -f *.dump
-	-@rm -f *.out
-	-@rm -f *.bc
-	-@rm -f .*.dot
-
-.PRECIOUS: %.0.ll %.1.ll %.2.ll %.vec.ll %.slp.ll %.S
+	@rm -rf output
+	@find . -name '*.ll' -exec rm -r {} \;
+	@find . -name '*.S' -exec rm -r {} \;
 
 .PHONY: all clean
+
