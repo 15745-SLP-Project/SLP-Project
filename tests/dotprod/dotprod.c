@@ -1,10 +1,11 @@
 
-#define MSIZE 1024
+#define MSIZE (1 << 15)
 
-unsigned int A[MSIZE];
-unsigned int B[MSIZE];
+int A[MSIZE];
+int B[MSIZE];
 
 static void init() {
+  #pragma clang loop unroll_count(4)
   for (int i=0; i < MSIZE; i++) {
   	A[i] = i;
     B[i] = MSIZE - i;
@@ -12,7 +13,7 @@ static void init() {
 }
 
 static int dotprod() {
-	unsigned int tmp[MSIZE];
+	int tmp[MSIZE];
 
 	#pragma clang loop unroll_count(4)
 	for (int i=0; i < MSIZE; i++) {

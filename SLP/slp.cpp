@@ -443,8 +443,20 @@ public:
 
       // not from same pack, so need to prepack operands
       else {
+
+        // determine element type in vector
+        Type* baseType;
+        if (pack->getOpcode() == Instruction::Store) {
+          auto* storeInstr = dyn_cast<StoreInst>(pack->getFirstElement());
+          baseType = storeInstr->getValueOperand()->getType();
+          outs() << *baseType << "\n";
+        }
+        else {
+          baseType = pack->getFirstElement()->getType();
+          outs() << *baseType << "\n";
+        }
+
         // create new vec
-        auto *baseType = pack->getNthElement(0)->getType();
         auto *vecType = VectorType::get(baseType, pack->getSize());
         auto *zero = builder.getInt32(0);
         auto *size = builder.getInt32(1);
