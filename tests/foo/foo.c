@@ -1,6 +1,6 @@
 #include <stdio.h>
 
-#define N (1 << 28)
+#define N (1 << 5)
 
 static long A[N];
 

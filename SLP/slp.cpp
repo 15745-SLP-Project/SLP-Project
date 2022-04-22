@@ -118,12 +118,23 @@ public:
 
         // Find the induction variable
         Value *v = gep->getOperand(gepNumIndices);
+
+        // outs() << "\n";
+        // outs() << s;
+
+
         if (auto addInst = dyn_cast<BinaryOperator>(v)) {
+          // outs() << "here1\n";
+
           if (addInst->getOpcode() == Instruction::Add ||
               addInst->getOpcode() == Instruction::Or) {
+            // outs() << "here2\n";
+
             Value *operand0 = addInst->getOperand(0);
             Value *operand1 = addInst->getOperand(1);
             if (isa<ConstantInt>(operand1)) {
+              // outs() << "here3\n";
+
               // Get the memory reference index w.r.t. base address
               unsigned int index = cast<ConstantInt>(operand1)->getZExtValue();
               setAlignment(&s, b, operand0, index);
@@ -488,8 +499,8 @@ public:
       Pack *pack = *packListIter;
 
       // IRBuilder for this pack
-      // have it start adding new instructions before first instruction of pack
-      IRBuilder<> builder(pack->getFirstElement());
+      // have it start adding new instructions before last instruction of pack
+      IRBuilder<> builder(pack->getLastElement());
 
       unsigned int opcode = pack->getOpcode();
       unsigned int vecWidth = pack->getVecWidth();
