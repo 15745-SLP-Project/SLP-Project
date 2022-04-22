@@ -5,7 +5,7 @@ int A[MSIZE];
 int B[MSIZE];
 
 static void init() {
-  #pragma clang loop unroll_count(4)
+  // #pragma clang loop unroll_count(4)
   for (int i=0; i < MSIZE; i++) {
   	A[i] = i;
     B[i] = MSIZE - i;
