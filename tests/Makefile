@@ -61,6 +61,9 @@ $(TEST_NAME).2.out: $(2_os) | $(2_Ss)
 $(TEST_NAME).slp.out: $(slp_os) | $(slp_Ss)
 	$(CC) -o $@ $^ -lm
 
+%.qemu: %.out
+	qemu-aarch64 -L /usr/aarch64-linux-gnu ./$^
+
 .PRECIOUS: %.0.ll %.1.ll %.2.ll %.slp.ll
 
 clean:

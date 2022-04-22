@@ -64,7 +64,7 @@ public:
   }
 
   int getIndex(Value *instr) {
-    for (int i=0; i < getSize(); i++) {
+    for (int i = 0; i < getSize(); i++) {
       if (pack[i] == instr) {
         return i;
       }
@@ -174,8 +174,6 @@ private:
 
   // Destination value
   Value *value;
-
-
 };
 
 /*
@@ -263,6 +261,19 @@ public:
   }
 
   bool schedule() {
+    // No need to perform SLP for only one pack
+    if (packSet.size() <= 1) {
+      return false;
+    }
+
+    // Ensure every pack has the same size
+    size_t packSetSize = packSet.begin()->getSize();
+    for (auto &pack : packSet) {
+      if (pack.getSize() != packSetSize) {
+        return false;
+      }
+    }
+
     buildDependency();
 
     // Already scheduled packs
@@ -329,22 +340,10 @@ public:
       for (unsigned int i = 0; i < instr->getNumOperands(); i++) {
         bool add = false;
 
-        if (!isa<BinaryOperator>(instr)) break;
+        if (!isa<BinaryOperator>(instr))
+          break;
 
         add = true;
-
-        // // If the dependent value is not in the packSet, add to prePack
-        // if (auto dependentInstr = dyn_cast<Instruction>(instr->getOperand(i))) {
-        //   auto dependent = findPack(dependentInstr);
-        //   if (!dependent) {
-        //     add = true;
-        //   }
-        // }
-        // // If the operand is not an instruction, e.g., is a function argument,
-        // // directly add to prePack
-        // else {
-        //   add = true;
-        // }
 
         if (add) {
           std::vector<Value *> tmp;
@@ -354,7 +353,7 @@ public:
             tmp.push_back(di);
           }
           if (verbose) {
-            outs() << "\tprepacking Pack " << " (" << p << ")\n";
+            outs() << "\tprepacking Pack (" << p << "):";
             for (auto &v : tmp) {
               outs() << " (" << v->getName() << ")";
             }
@@ -364,16 +363,6 @@ public:
         }
       }
     }
-
-    // if (verbose) {
-    //   for (auto &p : prePack) {
-    //     outs() << "[prePack]";
-    //     for (auto &v : p) {
-    //       outs() << " (" << v->getName() << ")";
-    //     }
-    //     outs() << "\n";
-    //   }
-    // }
   }
 
   void findPostPack() {
@@ -382,7 +371,8 @@ public:
       auto instr = p->getFirstElement();
       bool add = false;
 
-      if (!isa<BinaryOperator>(instr)) continue;
+      if (!isa<BinaryOperator>(instr))
+        continue;
 
       add = true;
 
@@ -407,26 +397,16 @@ public:
           tmp.push_back((Value *)ii);
         }
         if (verbose) {
-            outs() << "\tpostpacking Pack " << " (" << p << ")\n";
-            for (auto &v : tmp) {
-              outs() << " (" << v->getName() << ")";
-            }
-            outs() << "\n";
+          outs() << "\tpostpacking Pack (" << p << "):";
+          for (auto &v : tmp) {
+            outs() << " (" << v->getName() << ")";
           }
+          outs() << "\n";
+        }
 
         postPack.push_back(tmp);
       }
     }
-
-    // if (verbose) {
-    //   for (auto &p : postPack) {
-    //     outs() << "[postPack]";
-    //     for (auto &v : p) {
-    //       outs() << " (" << v->getName() << ")";
-    //     }
-    //     outs() << "\n";
-    //   }
-    // }
   }
 
 private:

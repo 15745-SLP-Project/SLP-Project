@@ -106,10 +106,11 @@ public:
         // When GEP uses global address (e.g., @A in foo), check whether the
         // first index is 0
         if (gepNumIndices == 2) {
-          unsigned int gepIndex0 =
-              cast<ConstantInt>(gep->getOperand(1))->getZExtValue();
-          if (gepIndex0 != 0)
-            continue;
+          if (auto gepIndex0 = dyn_cast<ConstantInt>(gep->getOperand(1))) {
+            if (gepIndex0->getZExtValue() != 0) {
+              continue;
+            }
+          }
         }
 
         // Base address
@@ -119,22 +120,12 @@ public:
         // Find the induction variable
         Value *v = gep->getOperand(gepNumIndices);
 
-        // outs() << "\n";
-        // outs() << s;
-
-
         if (auto addInst = dyn_cast<BinaryOperator>(v)) {
-          // outs() << "here1\n";
-
           if (addInst->getOpcode() == Instruction::Add ||
               addInst->getOpcode() == Instruction::Or) {
-            // outs() << "here2\n";
-
             Value *operand0 = addInst->getOperand(0);
             Value *operand1 = addInst->getOperand(1);
             if (isa<ConstantInt>(operand1)) {
-              // outs() << "here3\n";
-
               // Get the memory reference index w.r.t. base address
               unsigned int index = cast<ConstantInt>(operand1)->getZExtValue();
               setAlignment(&s, b, operand0, index);
