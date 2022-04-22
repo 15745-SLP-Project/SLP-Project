@@ -84,7 +84,7 @@ public:
       // Only look at memory access instructions
       if (s.mayReadOrWriteMemory()) {
         // getelementptr instruction
-        GetElementPtrInst *gep = NULL;
+        GetElementPtrInst *gep = nullptr;
 
         // Load instruction
         if (auto loadInst = dyn_cast<LoadInst>(&s)) {
@@ -98,8 +98,18 @@ public:
         }
 
         // Only look at load/store with simple gep
-        if (!gep || gep->getNumIndices() != 2) {
+        if (!gep || gep->getNumIndices() > 2) {
           continue;
+        }
+        unsigned int gepNumIndices = gep->getNumIndices();
+
+        // When GEP uses global address (e.g., @A in foo), check whether the
+        // first index is 0
+        if (gepNumIndices == 2) {
+          unsigned int gepIndex0 =
+              cast<ConstantInt>(gep->getOperand(1))->getZExtValue();
+          if (gepIndex0 != 0)
+            continue;
         }
 
         // Base address
@@ -107,7 +117,7 @@ public:
         baseAddress.insert(b);
 
         // Find the induction variable
-        Value *v = gep->getOperand(2);
+        Value *v = gep->getOperand(gepNumIndices);
         if (auto addInst = dyn_cast<BinaryOperator>(v)) {
           if (addInst->getOpcode() == Instruction::Add ||
               addInst->getOpcode() == Instruction::Or) {
