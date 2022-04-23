@@ -434,8 +434,18 @@ public:
 
       // not from same pack, so need to prepack operands
       else {
+
+        // determine element type in vector
+        Type* baseType;
+        if (pack->getOpcode() == Instruction::Store) {
+          auto* storeInstr = dyn_cast<StoreInst>(pack->getFirstElement());
+          baseType = storeInstr->getValueOperand()->getType();
+        }
+        else {
+          baseType = pack->getFirstElement()->getType();
+        }
+
         // create new vec
-        auto *baseType = pack->getNthElement(0)->getType();
         auto *vecType = VectorType::get(baseType, pack->getSize());
         auto *zero = builder.getInt32(0);
         auto *size = builder.getInt32(1);
@@ -484,10 +494,21 @@ public:
 
     outs() << "Code generation\n";
 
+    std::map<Pack*, bool> shouldDelete;
+
     // iterate over all packs in the scheduledPackList
     for (auto packListIter = P.lbegin(); packListIter != P.lend();
          packListIter++) {
       Pack *pack = *packListIter;
+      shouldDelete[pack] = true;
+
+      // only do codegen if pack is not independent stores
+      if (dyn_cast<StoreInst>(pack->getFirstElement())) {
+        if (!P.hasDependency(pack)) {
+          shouldDelete[pack] = false;
+          continue;
+        }
+      }
 
       // IRBuilder for this pack
       // have it start adding new instructions before last instruction of pack
@@ -582,8 +603,10 @@ public:
     for (auto packListIter = P.lbegin(); packListIter != P.lend();
          packListIter++) {
       Pack *pack = *packListIter;
-      for (int i = 0; i < pack->getSize(); i++) {
-        pack->getNthElement(i)->eraseFromParent();
+      if (shouldDelete[pack]) {
+        for (int i = 0; i < pack->getSize(); i++) {
+          pack->getNthElement(i)->eraseFromParent();
+        }
       }
     }
   }

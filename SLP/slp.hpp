@@ -409,6 +409,10 @@ public:
     }
   }
 
+  bool hasDependency(Pack *pack) {
+    return (dependency.find(pack) != dependency.end());
+  }
+
 private:
   /*
    * packSet, stored in a vector
