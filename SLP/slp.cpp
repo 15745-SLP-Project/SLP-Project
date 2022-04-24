@@ -119,30 +119,27 @@ public:
 
         // Find the induction variable
         Value *v = gep->getOperand(gepNumIndices);
+        unsigned int index = 0;
+        Value *operand0, *operand1;
 
-        if (auto addInst = dyn_cast<BinaryOperator>(v)) {
+        while (auto addInst = dyn_cast<BinaryOperator>(v)) {
           if (addInst->getOpcode() == Instruction::Add ||
               addInst->getOpcode() == Instruction::Or) {
-            Value *operand0 = addInst->getOperand(0);
-            Value *operand1 = addInst->getOperand(1);
+            operand0 = addInst->getOperand(0);
+            operand1 = addInst->getOperand(1);
             if (isa<ConstantInt>(operand1)) {
-              // Get the memory reference index w.r.t. base address
-              unsigned int index = cast<ConstantInt>(operand1)->getZExtValue();
-              setAlignment(&s, b, operand0, index);
-              if (verbose)
-                outs() << "[setAlignRef] set alignment for (" << s
-                       << "), base = " << b->getName()
-                       << ", iv = " << operand0->getName()
-                       << ", index = " << index << "\n";
+              index += cast<ConstantInt>(operand1)->getZExtValue();
             }
+            v = operand0;
+          } else {
+            break;
           }
-        } else {
-          setAlignment(&s, b, v, 0);
-          if (verbose)
-            outs() << "[setAlignRef] set alignment for (" << s
-                   << "), base = " << b->getName() << ", iv = " << v->getName()
-                   << ", index = 0\n";
         }
+        setAlignment(&s, b, v, index);
+        if (verbose)
+          outs() << "[setAlignRef] set alignment for (" << s
+                 << "), base = " << b->getName() << ", iv = " << v->getName()
+                 << ", index = " << index << "\n";
       }
     }
   }
@@ -436,12 +433,11 @@ public:
       else {
 
         // determine element type in vector
-        Type* baseType;
+        Type *baseType;
         if (pack->getOpcode() == Instruction::Store) {
-          auto* storeInstr = dyn_cast<StoreInst>(pack->getFirstElement());
+          auto *storeInstr = dyn_cast<StoreInst>(pack->getFirstElement());
           baseType = storeInstr->getValueOperand()->getType();
-        }
-        else {
+        } else {
           baseType = pack->getFirstElement()->getType();
         }
 
@@ -494,7 +490,7 @@ public:
 
     outs() << "Code generation\n";
 
-    std::map<Pack*, bool> shouldDelete;
+    std::map<Pack *, bool> shouldDelete;
 
     // iterate over all packs in the scheduledPackList
     for (auto packListIter = P.lbegin(); packListIter != P.lend();
