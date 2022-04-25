@@ -1,27 +1,27 @@
+#include <stdio.h>
+#include <time.h>
 
-#define MSIZE (1 << 15)
+#define MSIZE (1 << 18)
 
-int A[MSIZE];
-int B[MSIZE];
+float A[MSIZE];
+float B[MSIZE];
 
 static void init() {
-  // #pragma clang loop unroll_count(4)
-  for (int i=0; i < MSIZE; i++) {
-  	A[i] = i;
+  for (int i = 0; i < MSIZE; i++) {
+    A[i] = i;
     B[i] = MSIZE - i;
   }
 }
 
-static int dotprod() {
-	int tmp[MSIZE];
+float dotprod() {
+  float tmp[MSIZE];
 
-	#pragma clang loop unroll_count(4)
-	for (int i=0; i < MSIZE; i++) {
-		tmp[i] = A[i] * B[i];
-	}
+  for (int i = 0; i < MSIZE; i++) {
+    tmp[i] = A[i] * B[i];
+  }
 
-	int out = 0;
-	for (int i=0; i < MSIZE; i++) {
+  float out = 0;
+  for (int i = 0; i < MSIZE; i++) {
     out += tmp[i];
   }
   return out;
@@ -29,5 +29,16 @@ static int dotprod() {
 
 int main() {
   init();
-  return dotprod();
+
+  clock_t start, end;
+  double t;
+
+  start = clock();
+  float result = dotprod();
+  end = clock();
+  t = ((double)(end - start)) / CLOCKS_PER_SEC * 1e6;
+
+  printf("result = %f, time = %f us\n", result, t);
+
+  return 0;
 }

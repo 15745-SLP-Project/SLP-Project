@@ -1,10 +1,11 @@
 #include <stdio.h>
+#include <time.h>
 
 /*----------------------------------------------------------------------------
  * Internal Definitions
  *----------------------------------------------------------------------------*/
 
-#define MSIZE 256
+#define MSIZE 128
 
 // The matrices used for matrix multiplication
 double A[MSIZE][MSIZE];
@@ -18,7 +19,6 @@ double C[MSIZE][MSIZE];
 static void init() {
   int i, j;
   for (i = 0; i < MSIZE; i++) {
-#pragma clang loop unroll_count(4)
     for (j = 0; j < MSIZE; j++) {
       A[i][j] = i * MSIZE + j;
       B[i][j] = ((i + 1) << 16) + (j + 1);
@@ -39,7 +39,7 @@ void mmm(double A[MSIZE][MSIZE], double B[MSIZE][MSIZE],
     for (output_col = 0; output_col < B_cols; output_col++) {
 
       // No dependence between loops
-#pragma clang loop unroll_count(4)
+      // #pragma clang loop unroll_count(4)
       for (input_dim = 0; input_dim < A_cols; input_dim++) {
         tmp[input_dim] = A[output_row][input_dim] * B[input_dim][output_col];
       }
@@ -58,7 +58,6 @@ double matrix_add_reduce(int rows, int cols, double M[rows][cols]) {
   int row, col;
 
   for (row = 0; row < rows; row++) {
-#pragma clang loop unroll_count(4)
     for (col = 0; col < cols; col++) {
       sum += M[row][col];
     }
@@ -72,11 +71,17 @@ int main() {
 
   init();
 
+  clock_t start, end;
+  double t;
+
+  start = clock();
   mmm(A, B, C);
+  end = clock();
+  t = ((double)(end - start)) / CLOCKS_PER_SEC * 1e6;
 
   /* Sum the output matrix and return the binary representation of the
    * floating-point sum (it is not converted to an integer). */
   double sum = matrix_add_reduce(MSIZE, MSIZE, C);
-  printf("%f\n", sum);
+  printf("sum = %f, time = %f\n", sum, t);
   return 0;
 }
