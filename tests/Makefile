@@ -1,4 +1,4 @@
-CC = gcc
+CC = aarch64-linux-gnu-gcc
 
 TARGET = $(TEST).0.out $(TEST).1.out $(TEST).2.out $(TEST).slp.out $(TEST).vec.out
 CFLAGS = -target aarch64-linux-gnu -I /usr/aarch64-linux-gnu/include -I $(TEST)/src
@@ -33,13 +33,15 @@ all: $(OUTPUT_DIR) $(SRCS) $(TEST_NAME).0.out $(TEST_NAME).1.out $(TEST_NAME).2.
 	clang -O0 $(CFLAGS) -emit-llvm -S -o $@ $^
 
 %.1.ll: %.c
-	clang -O1 $(CFLAGS) -emit-llvm -S -o $@ $^
+	clang -O1 -ffast-math $(CFLAGS) -emit-llvm -S -o $@ $^
 
 %.2.ll: %.c
-	clang -O2 $(CFLAGS) -emit-llvm -S -o $@ $^
+	clang -O2 -ffast-math $(CFLAGS) -emit-llvm -S -o $@ $^
 
 %.slp.ll: %.1.ll
 	opt -instnamer -S -o $^ $^
+# Loop unroll before SLP, ONLY ENABLED for simple examples without nested loops
+	opt -loop-unroll -unroll-count=4 -S -o $^ $^
 	opt -load ../SLP/slp.so -slp -S -o $@ $^
 	opt -dce -S -o $@ $@
 

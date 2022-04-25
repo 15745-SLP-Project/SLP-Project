@@ -80,6 +80,7 @@ public:
   }
 
   void setAlignRef(BasicBlock &BB) {
+    unsigned int divisor = UINT32_MAX;
     for (auto &s : BB) {
       // Only look at memory access instructions
       if (s.mayReadOrWriteMemory()) {
@@ -136,11 +137,29 @@ public:
           }
         }
         setAlignment(&s, b, v, index);
-        if (verbose)
-          outs() << "[setAlignRef] set alignment for (" << s
-                 << "), base = " << b->getName() << ", iv = " << v->getName()
-                 << ", index = " << index << "\n";
+        // Find the minimum positive divisor for all alignment info
+        if (index > 0 && index < divisor) {
+          divisor = index;
+        }
       }
+    }
+
+    if (divisor == UINT32_MAX) {
+      return;
+    }
+
+    for (auto alignInfoEntry : alignInfo) {
+      auto instr = alignInfoEntry.first;
+      auto align = getAlignment(instr);
+
+      // Need to further check the correctness
+      // setAlignmentIndex(instr, align->index / divisor);
+
+      if (verbose)
+        outs() << "[setAlignRef] set alignment for (" << *instr
+               << "), base = " << align->base->getName()
+               << ", iv = " << align->inductionVar->getName()
+               << ", index = " << align->index << "\n";
     }
   }
 
@@ -157,6 +176,13 @@ public:
     AlignInfo *align = getAlignment(src);
     alignInfo.emplace(
         std::map<Instruction *, AlignInfo>::value_type(dst, *align));
+  }
+
+  void setAlignmentIndex(Instruction *s, unsigned int newIndex) {
+    auto align = getAlignment(s);
+    if (align) {
+      align->index = newIndex;
+    }
   }
 
   AlignInfo *getAlignment(Instruction *s) {
@@ -556,8 +582,35 @@ public:
         break;
       }
 
+      case Instruction::Call: {
+        // Intrinsic call instructions
+        if (auto intrinsicInst =
+                dyn_cast<IntrinsicInst>(pack->getFirstElement())) {
+          // Function return type
+          std::vector<Type *> types;
+          types.push_back(vecType);
+          auto typesArrayRef = ArrayRef<Type *>(types);
+
+          // Function arguments
+          std::vector<Value *> values;
+          for (unsigned int i = 0; i < intrinsicInst->getNumArgOperands();
+               i++) {
+            values.push_back(getOperandVec(builder, P, pack, i));
+          }
+          auto valuesArrayRef = ArrayRef<Value *>(values);
+
+          auto intrinsic = builder.CreateIntrinsic(
+              intrinsicInst->getIntrinsicID(), typesArrayRef, valuesArrayRef);
+          pack->setDest(intrinsic);
+          outs() << "\t" << *intrinsic << "\n";
+        } else {
+          outs() << "Unsupported instruction call\n";
+        }
+        break;
+      }
+
       default: {
-        if (isa<BinaryOperator>(pack->getNthElement(0))) {
+        if (isa<BinaryOperator>(pack->getFirstElement())) {
           Value *operand0 = getOperandVec(builder, P, pack, 0);
           Value *operand1 = getOperandVec(builder, P, pack, 1);
           auto binOp =
@@ -566,10 +619,9 @@ public:
 
           outs() << "\t" << *binOp << "\n";
           break;
-        }
-
-        else {
-          outs() << "Unsupported opcode " << opcode << "\n";
+        } else {
+          outs() << "Unsupported opcode " << opcode << " ("
+                 << pack->getFirstElement()->getOpcodeName() << ")\n";
         }
       }
       }
